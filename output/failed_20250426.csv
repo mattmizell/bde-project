@@ -1,0 +1,114 @@
+email_id,subject,from_addr,error,content
+9,Security alert,Google <no-reply@accounts.google.com>,Expecting value: line 1 column 1 (char 0),"[image: Google]
+App password used to sign in was removed
+
+
+bdepricing@gmail.com
+If you didn't remove this password, someone might be using your account.
+Check and secure your account now.
+Check activity
+<https://accounts.google.com/AccountChooser?Email=bdepricing@gmail.com&continue=https://myaccount.google.com/alert/nt/1745320434483?rfn%3D269%26rfnc%3D1%26eid%3D9147202511039371536%26et%3D0>
+You can also see security activity at
+https://myaccount.google.com/notifications
+You received this email to let you know about important changes to your
+Google Account and services.
+© 2025 Google LLC, 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA
+"
+12,Copying you on the pricing email,Matt Mizell <matt.mizell@gmail.com>,'str' object has no attribute 'get',"Test
+"
+18,Fw: FW: FleetFuelsNWPreferredCustomerPricing04242025_1800,"""Bryce \""Rooster\"" Rawers"" <bryce.rawers@fleetfuelsnw.com>",Expecting value: line 1 column 1 (char 0),"Trying again
+
+
+
+________________________________
+From: Microsoft Outlook
+Sent: Thursday, April 24, 2025 6:18 PM
+To: bdepricing@gmail.com
+Subject: Undeliverable: FW: FleetFuelsNWPreferredCustomerPricing04242025_1800
+
+
+Delivery has failed to these recipients or groups:
+
+bdepricing@gmail.com (bdepricing@gmail.com)<mailto:bdepricing@gmail.com>
+Your message wasn't delivered because the recipient's email provider rejected it.
+
+
+
+
+
+
+
+
+Diagnostic information for administrators:
+
+Generating server: IA2PR18MB5885.namprd18.prod.outlook.com
+
+bdepricing@gmail.com
+Remote server returned '550 5.7.520 Access denied, Your organization does not allow external forwarding. Please contact your administrator for further assistance. AS(7555)'
+
+Original message headers:
+
+Received: from DM5PR18MB2278.namprd18.prod.outlook.com (2603:10b6:4:b6::20) by
+ IA2PR18MB5885.namprd18.prod.outlook.com (2603:10b6:208:4af::11) with
+ Microsoft SMTP Server (version=TLS1_2,
+ cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id 15.20.8678.24; Thu, 24 Apr
+ 2025 23:16:26 +0000
+Received: from DM5PR18MB2278.namprd18.prod.outlook.com ([::1]) by
+ DM5PR18MB2278.namprd18.prod.outlook.com ([fe80::b3d7:553b:7262:1c17%3]) with
+ Microsoft SMTP Server id 15.20.8678.021; Thu, 24 Apr 2025 23:16:26 +0000
+From: ""Bryce \""Rooster\"" Rawers"" <bryce.rawers@fleetfuelsnw.com>
+To: ""bdepricing@gmail.com"" <bdepricing@gmail.com>
+Subject: FW: FleetFuelsNWPreferredCustomerPricing04242025_1800
+Thread-Topic: FleetFuelsNWPreferredCustomerPricing04242025_1800
+Thread-Index: Adu1buD6U76G21orQaqyITxcdSvTiAAAAYDh
+Date: Thu, 24 Apr 2025 23:16:26 +0000
+Message-ID: <c980fd0a8f464010b1fd23bc524627e7@DM5PR18MB2278.namprd18.prod.outlook.com>
+References: <CYYPR11MB833112EBC951EAA9D227C634AC852@CYYPR11MB8331.namprd11.prod.outlook.com>
+In-Reply-To: <CYYPR11MB833112EBC951EAA9D227C634AC852@CYYPR11MB8331.namprd11.prod.outlook.com>
+Accept-Language: en-US
+X-MS-Has-Attach: yes
+X-MS-Exchange-Inbox-Rules-Loop: bryce.rawers@fleetfuelsnw.com
+X-MS-TNEF-Correlator:
+authentication-results: dkim=none (message not signed)
+ header.d=none;dmarc=none action=none header.from=fleetfuelsnw.com;
+x-ms-exchange-parent-message-id: <CYYPR11MB833112EBC951EAA9D227C634AC852@CYYPR11MB8331.namprd11.prod.outlook.com>
+auto-submitted: auto-generated
+x-ms-exchange-generated-message-source: Mailbox Rules Agent
+x-ms-publictraffictype: Email
+x-ms-traffictypediagnostic: DM5PR18MB2278:EE_|IA2PR18MB5885:EE_
+x-ms-office365-filtering-correlation-id: 1eb1247b-6850-48ab-21b1-08dd83860976
+x-ms-exchange-senderadcheck: 1
+x-ms-exchange-antispam-relay: 0
+x-microsoft-antispam: BCL:0;ARA:13230040|10070799003|376014|366016|1800799024|8096899003|4053099003;
+x-microsoft-antispam-message-info: =?iso-8859-1?Q?9abm3Z1C0Ga1/fUmycM72Lgiessdays/cYMygpJGdVUgz13g1UKLDRwdkw?=
+ =?iso-8859-1?Q?6Bmgt/4qgmcW6Hpx+X+4iDLnFhO3phrlIi5FUXh1Q4bNqY8QyYto+njfhU?=
+ =?iso-8859-1?Q?3iBPfHAULSyoFShkfk5QxLhMbqDYK0LrTUJvdkZjlerCFQ2Wked2pF0yfR?=
+ =?iso-8859-1?Q?mNaAu9mIR+jSReZW93TtdWW3Mm+vyPTWFq9sfCf/UtlHcy/x45Qn01tow0?=
+ =?iso-8859-1?Q?Pom5jkvLu5BoeajXxEaAKpLgPqjC7djE/JA05aGHWumlcbbbHiSjrcyaKs?=
+ =?iso-8859-1?Q?nIYjPxqk+InIv4AZWr+RyODW3c2fG/33bq91DH2ZDh/JoIGKT7ZzqPVEFX?=
+ =?iso-8859-1?Q?+rrp/tPLKdHvCfq46NuCh51M2aEnkkfC8o/OTUNUekMj5FPlNgY9i5hd+B?=
+ =?iso-8859-1?Q?A7HsspkbpKAf7yU+bY0FAE5mM6dA+faN/F4zzT8Aaub1l4I7n31R55ExW4?=
+ =?iso-8859-1?Q?CN8qcBeCaBS+ARuTymZiZTR47uTGzcXxyAPOkGRZ0SMmvuu3cexsnRikAr?=
+ =?iso-8859-1?Q?3EdCZnj/s4Ya5kN1Dl0HAXeuxTYkRjsLi65UGU0IJ5BJ6bTWcmiNOU2oLp?=
+ =?iso-8859-1?Q?tZb2EZ/0RoPy/NQ+zre0q6AARtX+LJNR+nftli7rZGeuCpb1ReNidCi9bw?=
+ =?iso-8859-1?Q?dIkEu2gJ0hXQMuKAy1FGgtTR052eGndhHnngbzaynm/OhYetT07QdyweZo?=
+ =?iso-8859-1?Q?doqbdh/C7sQ/3JpHa4y51Q91Bpt+DwO8jOa2Jz9PqBR6vJBZ7BujUBzJHU?=
+ =?iso-8859-1?Q?kDrxaQNcDjMjS8hKFcHnmeoeP+kWnewyiI6Rp+x/27KAMpsMoQAb0DfydV?=
+ =?iso-8859-1?Q?EBEVRaNG6fXR3ieuHyaCXP4aICUDnJwxzY6OlmUvYhazcoMsCdUMqVn9fe?=
+ =?iso-8859-1?Q?t3+phpRZwAlZGsZaYejnhZUWnTmO7It2oGD5aPfkX3jg4pZfmwzqu2k5M9?=
+ =?iso-8859-1?Q?tA1I4QJVoY+kZBsAbKbNyaZ2ObkfWHnXFtgFqBYy6QCWE7x8LVT+cTz3uD?=
+ =?iso-8859-1?Q?YdziK9cByAE8TCIJbhyUVPdkgL/R05aG3MO3cHIc0ccKuBUu1xJ7CWNvCR?=
+ =?iso-8859-1?Q?Why6YdnHZS2Iaf6dPFydtHHZeQ/tNtmtCF14lBCoaXIMDqZPlF7fh7ozjH?=
+ =?iso-8859-1?Q?6nH9N9HI9DiZmQ5AKo8VnvUDNjgq5nF9UR7hWA7GKE8hfZgUvj/62rx4tb?=
+ =?iso-8859-1?Q?6ZqOddo+hxYVh9pc8zgXIzosgMlX0w9IiNbM49JbI/ma1L0uCpq1JTS1LZ?=
+ =?iso-8859-1?Q?3y9mnqT0Af75qpv8IoeP46DtT2uNA7u//F3db95ZS86Sr594r7JhKlw2eD?=
+ =?iso-8859-1?Q?CiFlfJM9Yj9AGl5wE66cv+nzzBPFy4aoMjYLWnRY0//uvlAeR1HH8sRmWv?=
+ =?iso-8859-1?Q?5cZ6Ohx5KUu3tXIgqf6h0A+v7fiLlWMn1siPNTolzRofQZ4UrGroY=3D?=
+x-forefront-antispam-report: CIP:255.255.255.255;CTRY:;LANG:en;SCL:1;SRV:;IPV:NLI;SFV:NSPM;H:DM5PR18MB2278.namprd18.prod.outlook.com;PTR:;CAT:NONE;SFS:(13230040)(10070799003)(376014)(366016)(1800799024)(8096899003)(4053099003);DIR:OUT;SFP:1102;
+x-ms-exchange-antispam-messagedata-chunkcount: 1
+x-ms-exchange-antispam-messagedata-0: x7TaD0uYuElpcMfjQt6lQW/+kDvlcUyo0ktWnz0yELUUIrVuV3cc3Bsc32SMimMGqfikbWiadhHmjEIjYZLUuWeO2LsBJ/8ZKY5YYAs/9gkN7SlV74Gnin3ITF8zY13Bejb8Tapub5M5+DnYGxPf5GW/g4r45IU2r6mRcB+VBjC2XqsuC8jNFOSbJvm2a+a2Dx5XcyXRlhnMH854DQ7AR/JNIlIsDaIdV5cpMYYICrU/o/0zrO74TS/8u6KkimCJ9JeUt6UE+ABxZi9RLPYBX6Je6NTBgTnnD+8s8rtzyR/hXrXjubKpQMOCR4VSkrBC
+Content-Type: multipart/mixed;
+        boundary=""_004_c980fd0a8f464010b1fd23bc524627e7DM5PR18MB2278namprd18pr_""
+MIME-Version: 1.0
+
+"
