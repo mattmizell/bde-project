@@ -163,9 +163,9 @@ async def process_email_with_delay(
             "- Output MUST be a pure JSON array. Do not include any text outside the array.\n"
             "- If any field is missing, set it to `null`.\n"
             "- Price must be a number, not a string.\n"
-            "- If 'Supply' (position holder) and 'Terminal' are combined in the email (e.g., 'Phillips 66 St. Louis'),\n"
-            "  - Extract the position holder into 'Supply' (e.g., 'Phillips 66')\n"
-            "  - Extract the rest into 'Terminal' (e.g., 'St. Louis').\n"
+            "- If 'Supply' (position holder) and 'Terminal' are combined (e.g., 'Phillips 66 St. Louis'),\n"
+            "  - Extract the position holder into 'Supply'\n"
+            "  - Extract the rest into 'Terminal'.\n"
             "- Supplier should match the company sending the email (Wallis, Luke Oil, etc.).\n\n"
             "Here is the email content:\n\n"
             f"{email_content}"
@@ -194,10 +194,9 @@ async def process_email_with_delay(
                 logger.error(f"Process {process_id}: JSON decode error on Grok response: {e}")
                 raise
 
-        # Extract the JSON inside ```json ... ``` if it exists
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
-        # Check if it has triple backticks
+        # Extract the JSON inside ```json ... ``` if it exists
         if content.startswith("```json"):
             match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
             if match:
@@ -208,6 +207,11 @@ async def process_email_with_delay(
         parsed_data = json.loads(content) if isinstance(content, str) else content
 
         for row in parsed_data:
+            # Fill missing Effective Date with email "Sent Date" if available
+            effective_date = row.get("Effective Date")
+            if not effective_date and isinstance(email.get("date"), datetime):
+                effective_date = email["date"].strftime("%Y-%m-%d")
+
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
@@ -215,7 +219,7 @@ async def process_email_with_delay(
                 "Terminal": row.get("Terminal", ""),
                 "Price": row.get("Price", 0),
                 "Volume Type": row.get("Volume Type", ""),
-                "Effective Date": row.get("Effective Date", ""),
+                "Effective Date": effective_date or "",
                 "Effective Time": row.get("Effective Time", ""),
             })
 
