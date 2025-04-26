@@ -149,8 +149,25 @@ async def process_email_with_delay(
 
         # Build the prompt
         prompt = (
-            f"Extract fuel pricing data from the following email content. "
-            f"Return a JSON array with Supplier, Supply, Product Name, Terminal, Price, Volume Type, Effective Date, Effective Time.\n\n"
+            "You are an expert at extracting pricing information from complex fuel supplier emails.\n\n"
+            "Extract the following fields for each fuel product mentioned:\n"
+            "- Supplier (The marketing company or middleman who sent the email: e.g., Wallis, Luke Oil, WFS, Bylo)\n"
+            "- Supply (The actual position holder company owning the fuel: e.g., Phillips 66, Marathon, Exxon)\n"
+            "- Product Name (The fuel product type)\n"
+            "- Terminal (The city name or terminal location where fuel is available)\n"
+            "- Price (Numeric value)\n"
+            "- Volume Type (Contract, spot, rack, etc.)\n"
+            "- Effective Date (Format: YYYY-MM-DD)\n"
+            "- Effective Time (Format: HH:MM in 24-hour time)\n\n"
+            "⚡ IMPORTANT RULES:\n"
+            "- Output MUST be a pure JSON array. Do not include any text outside the array.\n"
+            "- If any field is missing, set it to `null`.\n"
+            "- Price must be a number, not a string.\n"
+            "- If 'Supply' (position holder) and 'Terminal' are combined in the email (e.g., 'Phillips 66 St. Louis'),\n"
+            "  - Extract the position holder into 'Supply' (e.g., 'Phillips 66')\n"
+            "  - Extract the rest into 'Terminal' (e.g., 'St. Louis').\n"
+            "- Supplier should match the company sending the email (Wallis, Luke Oil, etc.).\n\n"
+            "Here is the email content:\n\n"
             f"{email_content}"
         )
 
