@@ -1,20 +1,14 @@
 # main.py
 import os
-from dotenv import load_dotenv
-load_dotenv()
-
-PORT = int(os.getenv("PORT", 8000))
-
-import os
 import uuid
 import json
-from datetime import datetime
-from pathlib import Path
-
 import asyncio
 import aiohttp
 import logging
+from datetime import datetime
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,35 +22,40 @@ from parser import (
     save_failed_emails_to_csv,
 )
 
-# Load environment
+# Load environment variables
+load_dotenv()
 env = load_env()
 
-# FastAPI app
-app = FastAPI()
-
-# Allow CORS from frontend url (dynamic based on env or fallback)
-frontend_origin = os.getenv("FRONTEND_URL", "http://localhost:5173")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[frontend_origin],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger("main")
-
+# Settings
+PORT = int(os.getenv("PORT", 8000))
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Track processes
+# Initialize FastAPI app
+app = FastAPI()
+
+# Setup CORS
+frontend_origin = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[frontend_origin],  # Frontend URL allowed
+    allow_credentials=True,
+    allow_methods=["*"],              # Allow all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],              # Allow all headers
+)
+
+# Logger setup
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger("main")
+
+# Track process statuses
 process_statuses = {}
 
-# Init mappings
+# Initialize mappings
 initialize_mappings()
+
 
 @app.post("/start-process")
 async def start_process(background_tasks: BackgroundTasks):
