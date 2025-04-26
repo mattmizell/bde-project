@@ -31,16 +31,18 @@ PORT = int(os.getenv("PORT", 8000))
 # Configure FastAPI app
 app = FastAPI()
 
-# Hardcoded frontend URL for CORS (Option 1)
+# After `app = FastAPI()`
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://bde-frontend-pf3m.onrender.com",
+        "https://bde-project.onrender.com",   # (Allow self-origin too, just to be safe)
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Logger setup
 logging.basicConfig(level=logging.DEBUG)
