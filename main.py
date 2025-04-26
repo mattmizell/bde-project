@@ -8,10 +8,10 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
 from parser import (
     load_env,
@@ -26,36 +26,38 @@ from parser import (
 load_dotenv()
 env = load_env()
 
-# Settings
 PORT = int(os.getenv("PORT", 8000))
-BASE_DIR = Path(__file__).parent
-OUTPUT_DIR = BASE_DIR / "output"
-OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Initialize FastAPI app
+# Configure FastAPI app
 app = FastAPI()
 
-# Setup CORS
-frontend_origin = os.getenv("FRONTEND_URL", "http://localhost:5173")
-
+# Hardcoded frontend URL for CORS (Option 1)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_origin],  # Frontend URL allowed
+    allow_origins=[
+        "https://bde-frontend-pf3m.onrender.com",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],              # Allow all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"],              # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Logger setup
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("main")
 
-# Track process statuses
+# Directory setup
+BASE_DIR = Path(__file__).parent
+OUTPUT_DIR = BASE_DIR / "output"
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Process tracking
 process_statuses = {}
 
 # Initialize mappings
 initialize_mappings()
 
+# --- FastAPI Routes ---
 
 @app.post("/start-process")
 async def start_process(background_tasks: BackgroundTasks):
@@ -86,6 +88,8 @@ async def download_file(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename, media_type="text/csv")
 
+# --- Background Email Processing Task ---
+
 async def run_processing(process_id: str):
     try:
         emails = await fetch_emails(env, process_id)
@@ -103,6 +107,7 @@ async def run_processing(process_id: str):
         async with aiohttp.ClientSession() as session:
             for idx, email in enumerate(emails):
                 process_statuses[process_id]["current_email"] = idx + 1
+
                 valid_rows, skipped_rows, failed_email = await process_email_with_delay(
                     email, env, process_id, session
                 )
