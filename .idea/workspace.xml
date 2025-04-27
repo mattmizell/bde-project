@@ -5,19 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3666ab22-453d-40cd-a7d1-a89577ec8fac" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.env" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/bde_project.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/clear_port.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/dummy_main.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/parser.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/start_project.ps1" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_app.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/prompts/opis_chat_prompt.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/prompts/opis_parse_prompt.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/prompts/supplier_chat_prompt.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/prompts/supplier_parse_prompt.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/parser.py" beforeDir="false" afterPath="$PROJECT_DIR$/parser.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_app.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -108,7 +102,7 @@
       <workItem from="1745590487051" duration="21867000" />
       <workItem from="1745618738063" duration="53000" />
       <workItem from="1745619276200" duration="9804000" />
-      <workItem from="1745667376442" duration="9060000" />
+      <workItem from="1745667376442" duration="13036000" />
     </task>
     <servers />
   </component>
