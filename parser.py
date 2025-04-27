@@ -212,3 +212,119 @@ async def process_email_with_delay(
         }
 
     return valid_rows, skipped_rows, failed_email
+
+def save_to_csv(data: List[Dict], output_filename: str, process_id: str) -> None:
+    try:
+        output_path = OUTPUT_DIR / output_filename
+        fieldnames = ["Supplier", "Supply", "Product Name", "Terminal", "Price", "Volume Type", "Effective Date", "Effective Time"]
+        mode = "a" if output_path.exists() else "w"
+        with open(output_path, mode, newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if mode == "w":
+                writer.writeheader()
+            for row in data:
+                writer.writerow(row)
+        logger.info(f"Saved {len(data)} rows to {output_path}")
+    except Exception as ex:
+        logger.error(f"Failed to save CSV: {ex}")
+
+def save_failed_emails_to_csv(failed_emails: List[Dict], output_filename: str, process_id: str) -> None:
+    try:
+        if not failed_emails:
+            return
+        failed_filename = f"failed_{output_filename.split('_')[1]}"
+        failed_path = OUTPUT_DIR / failed_filename
+        df_failed = pd.DataFrame(failed_emails)
+        df_failed.to_csv(failed_path, index=False)
+        logger.info(f"Saved failed emails to {failed_path}")
+    except Exception as ex:
+        logger.error(f"Failed to save failed emails to CSV: {ex}")
+
+
+async def process_all_emails(process_id: str, process_statuses: dict) -> None:
+    import imaplib
+    from email.parser import BytesParser
+    from email import policy
+
+    try:
+        logger.info(f"Process {process_id}: Fetching emails")
+        imap_server = imaplib.IMAP4_SSL(os.getenv("IMAP_SERVER"))
+        imap_server.login(os.getenv("IMAP_USERNAME"), os.getenv("IMAP_PASSWORD"))
+        imap_server.select("INBOX")
+        since_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
+        _, msg_nums = imap_server.search(None, f'(SINCE "{since_date}") UNSEEN')
+
+        emails = []
+        for num in msg_nums[0].split():
+            _, data = imap_server.fetch(num, "(RFC822)")
+            msg = BytesParser(policy=policy.default).parsebytes(data[0][1])
+            content = choose_best_content_from_email(msg)
+            subject = msg.get("Subject", "").strip()
+            from_addr = msg.get("From", "").strip()
+            if content:
+                emails.append({
+                    "uid": num.decode(),
+                    "content": content,
+                    "subject": subject,
+                    "from_addr": from_addr,
+                })
+
+        imap_server.logout()
+
+        process_statuses[process_id]["email_count"] = len(emails)
+
+        if not emails:
+            process_statuses[process_id]["status"] = "error"
+            process_statuses[process_id]["error"] = "No emails found."
+            return
+
+        output_file = f"parsed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        total_rows = 0
+        failed_emails = []
+
+        async with aiohttp.ClientSession() as session:
+            for idx, email in enumerate(emails):
+                process_statuses[process_id]["current_email"] = idx + 1
+
+                valid_rows, skipped_rows, failed_email = await process_email_with_delay(
+                    email, load_env(), process_id, session
+                )
+
+                if valid_rows:
+                    save_to_csv(valid_rows, output_file, process_id)
+                    total_rows += len(valid_rows)
+                    process_statuses[process_id]["row_count"] = total_rows
+
+                if failed_email:
+                    failed_email["content"] = email.get("content", "")
+                    failed_emails.append(failed_email)
+
+                await asyncio.sleep(2)  # gentle pacing between emails
+
+            if failed_emails:
+                logger.info(f"Retrying {len(failed_emails)} failed emails...")
+                for failed in failed_emails[:]:
+                    retry_email = {
+                        "uid": failed.get("email_id", "?"),
+                        "subject": failed.get("subject", ""),
+                        "from_addr": failed.get("from_addr", ""),
+                        "content": failed.get("content", ""),
+                    }
+                    valid_rows, skipped_rows, retry_failed = await process_email_with_delay(
+                        retry_email, load_env(), process_id, session
+                    )
+                    if valid_rows:
+                        save_to_csv(valid_rows, output_file, process_id)
+                        total_rows += len(valid_rows)
+                        process_statuses[process_id]["row_count"] = total_rows
+                        failed_emails.remove(failed)
+
+        save_failed_emails_to_csv(failed_emails, output_file, process_id)
+
+        process_statuses[process_id]["status"] = "done"
+        process_statuses[process_id]["output_file"] = output_file
+
+    except Exception as ex:
+        logger.error(f"Processing error: {str(ex)}")
+        process_statuses[process_id]["status"] = "error"
+        process_statuses[process_id]["error"] = str(ex)
