@@ -1,25 +1,16 @@
-# parserpy
 import os
-from dotenv import load_dotenv
-load_dotenv()
-
-PORT = int(os.getenv("PORT", 8000))
-
-import os
+import re
 import imaplib
 import aiohttp
 import asyncio
 import logging
 import pandas as pd
 import json
-import re
+import csv
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
-import csv
 from pathlib import Path
 from dotenv import load_dotenv
-
-# CORRECT email parsing imports
 from email import policy
 from email.parser import BytesParser
 
@@ -82,6 +73,29 @@ def initialize_mappings() -> None:
     logger.info(f"Loaded {len(TERMINAL_MAPPING)} terminal mappings")
 
 
+def choose_best_content_from_email(msg) -> str:
+    """
+    If the email has a .txt attachment, use it. Otherwise, use the plain text body.
+    """
+    for part in msg.walk():
+        filename = part.get_filename()
+        if filename and filename.endswith(".txt"):
+            try:
+                attachment_content = part.get_payload(decode=True).decode(errors="ignore")
+                if attachment_content.strip():
+                    logger.info(f"Using .txt attachment: {filename}")
+                    return attachment_content
+            except Exception as e:
+                logger.error(f"Failed to decode attachment {filename}: {e}")
+
+    body = msg.get_body(preferencelist=("plain"))
+    if body:
+        return body.get_content().strip()
+
+    logger.warning("No valid body or attachment found.")
+    return ""
+
+
 async def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
     logger.info(f"Process {process_id}: Fetching emails")
     try:
@@ -89,20 +103,14 @@ async def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, s
         imap_server.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
         imap_server.select("INBOX")
         since_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
-        logger.info(f"Process {process_id}: Searching for emails since {since_date}")
+        logger.info(f"Searching for emails since {since_date}")
         _, msg_nums = imap_server.search(None, f'(SINCE "{since_date}") UNSEEN')
-        logger.info(f"Process {process_id}: Found {len(msg_nums[0].split())} unread emails")
 
         emails = []
         for num in msg_nums[0].split():
-            logger.info(f"Process {process_id}: Fetching email {num.decode()}")
             _, data = imap_server.fetch(num, "(RFC822)")
             msg = BytesParser(policy=policy.default).parsebytes(data[0][1])
-            content_part = msg.get_body(preferencelist="plain")
-            content = content_part.get_content() if content_part else ""
-            for part in msg.walk():
-                if part.get_filename() and part.get_filename().endswith(".txt"):
-                    content += part.get_payload(decode=True).decode(errors="ignore")
+            content = choose_best_content_from_email(msg)
             subject = msg.get("Subject", "").strip()
             from_addr = msg.get("From", "").strip()
             if content:
@@ -114,22 +122,38 @@ async def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, s
                 })
 
         imap_server.logout()
-        logger.info(f"Process {process_id}: Fetched {len(emails)} emails")
+        logger.info(f"Fetched {len(emails)} emails")
         return emails
     except Exception as ex:
-        logger.error(f"Process {process_id}: Failed to fetch emails: {str(ex)}")
+        logger.error(f"Failed to fetch emails: {str(ex)}")
         return []
 
 
 def clean_email_content(content: str) -> str:
     try:
+        content = content.replace("=\n", "")
         content = re.sub(r"-{40,}", "", content)
         content = re.sub(r"\n{3,}", "\n\n", content)
-        cleaned = "\n".join(line.strip() for line in content.split("\n") if line.strip())
+        cleaned = "\n".join(line.strip() for line in content.splitlines())
         return cleaned[:6000].strip()
     except Exception as e:
         logger.error(f"Content cleaning failed: {e}")
         return content.strip()
+
+
+def mark_email_as_processed(uid: str, env: Dict[str, str]) -> None:
+    """
+    Mark an email as processed by adding a Gmail label 'BDE_Processed'.
+    """
+    try:
+        imap_server = imaplib.IMAP4_SSL(env["IMAP_SERVER"])
+        imap_server.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
+        imap_server.select("INBOX")
+        imap_server.store(uid, '+X-GM-LABELS', 'BDE_Processed')
+        logger.info(f"Marked email UID {uid} as processed (BDE_Processed)")
+        imap_server.logout()
+    except Exception as ex:
+        logger.error(f"Failed to mark email UID {uid} as processed: {str(ex)}")
 
 
 async def process_email_with_delay(
@@ -147,59 +171,40 @@ async def process_email_with_delay(
         if not email_content:
             raise ValueError("No content found in email")
 
-        # --- Detect if OPIS Rack report or normal supplier email ---
         is_opis = (
             "OPIS" in email_content and
             ("Rack" in email_content or "Wholesale" in email_content) and
             "Effective Date" in email_content
         )
 
-        # --- Build the correct prompt based on detection ---
         if is_opis:
-            logger.info(f"Process {process_id}: Detected OPIS rack report for email {email.get('uid', '?')}")
+            logger.info(f"Detected OPIS rack report for {email.get('uid', '?')}")
             prompt = (
-                "You are an expert at extracting pricing information from OPIS Rack Price Reports.\n\n"
+                "You are an expert at extracting pricing information from OPIS Rack Price Reports for Better Day Energy.\n\n"
                 "Extract the following fields for each product listed:\n"
-                "- Supplier: Supplier from the 'Supplier:' field\n"
-                "- Supply: Same as Supplier unless otherwise indicated\n"
-                "- Product Name: Specific fuel product name\n"
-                "- Terminal: City or terminal name from header\n"
-                "- Price: Rack Avg or Spot Mean price (numeric)\n"
-                "- Volume Type: Set 'Contract' unless otherwise stated\n"
-                "- Effective Date: YYYY-MM-DD format\n"
-                "- Effective Time: HH:MM format (24-hour)\n\n"
-                "⚡ Important Rules:\n"
-                "- Output MUST be pure JSON array with no extra text.\n"
-                "- Missing fields must be set as `null`.\n"
-                "- Repeat Terminal and Supplier as needed.\n"
-                "- Inherit Effective Date/Time if not explicitly repeated.\n"
-                "- Prioritize Rack Avg price.\n\n"
-                "Here is the OPIS Rack report content:\n\n"
+                "- Supplier\n- Supply (same as Supplier unless otherwise stated)\n"
+                "- Product Name\n- Terminal\n- Price (Rack Avg preferred)\n"
+                "- Volume Type ('Contract')\n- Effective Date\n- Effective Time\n\n"
+                "⚡ Output pure JSON array only.\n"
+                "⚡ Missing fields must be set to null.\n\n"
+                "Email Content:\n\n"
                 f"{email_content}"
             )
         else:
-            logger.info(f"Process {process_id}: Detected Supplier Pricing Email for {email.get('uid', '?')}")
+            logger.info(f"Detected Supplier pricing email for {email.get('uid', '?')}")
             prompt = (
-                "You are an expert at extracting pricing information from complex supplier pricing emails for petroleum products.\n\n"
-                "Extract the following fields for each product listed:\n"
-                "- Supplier: Company that sent the email\n"
-                "- Supply: Position holder if clearly stated; otherwise null\n"
-                "- Product Name: Fuel product name\n"
-                "- Terminal: Terminal or city name\n"
-                "- Price: Numeric value only\n"
-                "- Volume Type: Spot, Rack, or Contract (or null if missing)\n"
-                "- Effective Date: YYYY-MM-DD format\n"
-                "- Effective Time: HH:MM format (24-hour) or null\n\n"
-                "⚡ Important Rules:\n"
-                "- Output MUST be pure JSON array.\n"
-                "- Set missing fields to `null`.\n"
-                "- Split Supply and Terminal if combined.\n"
-                "- Do not invent missing fields. Only extract what is clear.\n\n"
-                "Here is the email content:\n\n"
+                "You are an expert at extracting pricing information from complex petroleum supplier emails for Better Day Energy.\n\n"
+                "Extract the following fields:\n"
+                "- Supplier\n- Supply\n- Product Name\n- Terminal\n"
+                "- Price (numeric)\n- Volume Type\n- Effective Date\n- Effective Time\n\n"
+                "⚡ Output pure JSON array only.\n"
+                "⚡ Missing fields must be set to null.\n"
+                "⚡ Split Supply/Terminal if combined.\n"
+                "⚡ No assumptions — only based on text.\n\n"
+                "Email Content:\n\n"
                 f"{email_content}"
             )
 
-        # --- Send request to Grok API ---
         api_url = "https://api.x.ai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {env['XAI_API_KEY']}",
@@ -210,20 +215,11 @@ async def process_email_with_delay(
             "messages": [{"role": "user", "content": prompt}],
         }
 
-        async with session.post(api_url, json=payload, headers=headers) as response:
-            if response.status != 200:
-                raise Exception(f"API error: {response.status} {await response.text()}")
-
+        async with session.post(api_url, headers=headers, json=payload) as response:
             raw_text = await response.text()
-            logger.debug(f"Process {process_id}: Raw Grok API response for email {email.get('uid', '?')}:\n{raw_text}")
 
-            try:
-                data = json.loads(raw_text)
-            except json.JSONDecodeError as e:
-                logger.error(f"Process {process_id}: JSON decode error on Grok response: {e}")
-                raise
-
-        # --- Parse the Grok content ---
+        logger.debug(f"Grok API response: {raw_text}")
+        data = json.loads(raw_text)
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
         if content.startswith("```json"):
@@ -231,7 +227,7 @@ async def process_email_with_delay(
             if match:
                 content = match.group(1).strip()
 
-        parsed_data = json.loads(content) if isinstance(content, str) else content
+        parsed_data = json.loads(content)
 
         for row in parsed_data:
             valid_rows.append({
@@ -245,8 +241,12 @@ async def process_email_with_delay(
                 "Effective Time": row.get("Effective Time", ""),
             })
 
+        # ✅ Mark email as processed only if parsing succeeded
+        if valid_rows:
+            mark_email_as_processed(email.get("uid", ""), env)
+
     except Exception as ex:
-        logger.error(f"Process {process_id}: Failed to process email {email.get('uid', '?')}: {str(ex)}")
+        logger.error(f"Failed to process email {email.get('uid', '?')}: {str(ex)}")
         failed_email = {
             "email_id": email.get("uid", "?"),
             "subject": email.get("subject", ""),
@@ -268,9 +268,9 @@ def save_to_csv(data: List[Dict], output_filename: str, process_id: str) -> None
                 writer.writeheader()
             for row in data:
                 writer.writerow(row)
-        logger.info(f"Process {process_id}: Saved {len(data)} rows to {output_path}")
+        logger.info(f"Saved {len(data)} rows to {output_path}")
     except Exception as ex:
-        logger.error(f"Process {process_id}: CSV save failed: {ex}")
+        logger.error(f"Failed to save CSV: {ex}")
 
 
 def save_failed_emails_to_csv(failed_emails: List[Dict], output_filename: str, process_id: str) -> None:
@@ -281,6 +281,6 @@ def save_failed_emails_to_csv(failed_emails: List[Dict], output_filename: str, p
         failed_path = OUTPUT_DIR / failed_filename
         df_failed = pd.DataFrame(failed_emails)
         df_failed.to_csv(failed_path, index=False)
-        logger.info(f"Process {process_id}: Saved failed emails to {failed_path}")
+        logger.info(f"Saved failed emails to {failed_path}")
     except Exception as ex:
-        logger.error(f"Process {process_id}: Failed to save failed emails to CSV: {ex}")
+        logger.error(f"Failed to save failed emails to CSV: {ex}")
