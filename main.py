@@ -98,6 +98,13 @@ async def run_processing(process_id: str):
     try:
         await process_all_emails(process_id, process_statuses)
         logger.info(f"✅ Processing complete for process_id {process_id}")
+
+        process_statuses[process_id]["status"] = "done"
+        # Optionally: if process_all_emails doesn't set output_file itself
+        # process_statuses[process_id]["output_file"] = output_file  # <-- already handled in process_all_emails
+
+        await asyncio.sleep(10)  # ⚡ Wait a bit after marking as done so frontend can finish downloading
+
     except Exception as ex:
         logger.exception(f"❌ Processing error for process_id {process_id}: {str(ex)}")
         process_statuses[process_id]["status"] = "error"
