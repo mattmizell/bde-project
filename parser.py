@@ -147,31 +147,85 @@ async def process_email_with_delay(
         if not email_content:
             raise ValueError("No content found in email")
 
-        # Build the prompt
-        prompt = (
-            "You are an expert at extracting fuel pricing information from emails.\n\n"
-            "For each product, extract the following fields:\n"
-            "- Supplier: (The marketing company sending the email: Wallis, Luke Oil, WFS, Bylo, OPIS)\n"
-            "- Supply: (The position holder: a true fuel company like Marathon, Shell, Exxon, BP, Cenex, PSX, XOM)\n"
-            "- Product Name: (e.g., 87E10, ULSD, CBOB)\n"
-            "- Terminal: (the city or location terminal, separate from supply)\n"
-            "- Price: (a number)\n"
-            "- Volume Type: (spot, contract, rack, etc.)\n"
-            "- Effective Date: (YYYY-MM-DD)\n"
-            "- Effective Time: (24-hour format HH:MM)\n\n"
-            "⚡ IMPORTANT:\n"
-            "- If supply and terminal are combined (e.g., 'PSX Cahokia'), split them:\n"
-            "   - Supply = 'PSX'\n"
-            "   - Terminal = 'Cahokia'\n"
-            "- Supply MUST be a known refiner like Marathon, Shell, BP, PSX, XOM, etc.\n"
-            "- If missing, guess based on common oil company names.\n"
-            "- If you cannot find supply, set Supply = null.\n"
-            "- Output pure JSON array. No text outside the array.\n"
-            "- Price must be a number, not string.\n"
-            "- If Effective Date missing, assume from email sent date.\n\n"
-            "Here is the email content:\n\n"
-            f"{email_content}"
-        )
+        prompt = f"""You are an expert at parsing complex fuel supplier emails and structured rack reports.
+
+You must extract **strict structured pricing information** into a pure JSON array.
+
+### Extract the following fields:
+- Supplier: The marketing company sending the email (e.g., Wallis, Luke Oil, WFS, Bylo, OPIS).
+- Supply: The **position holder** actually supplying the fuel (e.g., Marathon, Shell, BP, Cenex, PSX, XOM, etc.).
+- Product Name: The name of the product (e.g., 87E10, ULSD, WinterULSD, CBOB, Premium ULSD, Rec Gas 91, etc.).
+- Terminal: The terminal location (e.g., Cahokia, Wood River, St. Louis, Bettendorf).
+- Price: A number (no strings, no symbols).
+- Volume Type: If mentioned, specify (Rack, Contract, Spot). If not mentioned, set to null.
+- Effective Date: The date pricing is effective (Format: YYYY-MM-DD).
+- Effective Time: The time pricing is effective (24-hour clock, format HH:MM).
+
+### Important Parsing Instructions:
+- If Supplier and Supply are combined in a line (e.g., 'PSX Cahokia'), separate them: Supply = 'PSX', Terminal = 'Cahokia'.
+- Use knowledge of major fuel companies to infer Supply when possible.
+- If no explicit Effective Date is mentioned, fallback to the email sent date provided.
+- If Effective Time is missing, set it to null.
+- Ignore non-pricing related lines (e.g., disclaimers, contact info).
+- If price appears as 9.0000 or 9.9999 or 9.000, assume placeholder and treat carefully (only keep if consistent with other entries).
+- If any field is missing, set it to null.
+
+### OPIS Rack Reports Handling:
+- Parse line-by-line if the input appears tabular.
+- Supplier is the first word in each line.
+- Price is typically numeric after Supplier.
+- Terminal defaults to 'St. Louis, MO' unless otherwise specified.
+- Effective Date/Time is often stated once at the top of the file (e.g., 'Effective 04/26/25 18:00'). Apply it to all lines.
+
+### Output Rules:
+- Return ONLY a pure JSON array.
+- No text outside the array.
+- No Markdown formatting (no "```json" blocks).
+
+### Examples:
+
+**Wallis Email Example:**
+Input:
+Wallis Fuel Pricing: ULSD at Wood River 2.0850 effective 04/26/25 00:01
+
+Output:
+[
+  {{
+    "Supplier": "Wallis",
+    "Supply": "Marathon",
+    "Product Name": "ULSD",
+    "Terminal": "Wood River",
+    "Price": 2.0850,
+    "Volume Type": null,
+    "Effective Date": "2025-04-26",
+    "Effective Time": "00:01"
+  }}
+]
+
+**OPIS Rack File Example:**
+Input:
+Marathon 87E10 Cahokia 2.0655
+
+Output:
+[
+  {{
+    "Supplier": "OPIS",
+    "Supply": "Marathon",
+    "Product Name": "87E10",
+    "Terminal": "Cahokia",
+    "Price": 2.0655,
+    "Volume Type": "Contract",
+    "Effective Date": "2025-04-26",
+    "Effective Time": "18:00"
+  }}
+]
+
+---
+
+Here is the content to parse:
+
+{email_content}
+"""
 
         api_url = "https://api.x.ai/v1/chat/completions"
         headers = {
@@ -196,9 +250,9 @@ async def process_email_with_delay(
                 logger.error(f"Process {process_id}: JSON decode error on Grok response: {e}")
                 raise
 
+        # Extract the JSON inside ```json ... ``` if it exists
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
-        # Extract the JSON inside ```json ... ``` if it exists
         if content.startswith("```json"):
             match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
             if match:
@@ -209,11 +263,6 @@ async def process_email_with_delay(
         parsed_data = json.loads(content) if isinstance(content, str) else content
 
         for row in parsed_data:
-            # Fill missing Effective Date with email "Sent Date" if available
-            effective_date = row.get("Effective Date")
-            if not effective_date and isinstance(email.get("date"), datetime):
-                effective_date = email["date"].strftime("%Y-%m-%d")
-
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
@@ -221,7 +270,7 @@ async def process_email_with_delay(
                 "Terminal": row.get("Terminal", ""),
                 "Price": row.get("Price", 0),
                 "Volume Type": row.get("Volume Type", ""),
-                "Effective Date": effective_date or "",
+                "Effective Date": row.get("Effective Date", ""),
                 "Effective Time": row.get("Effective Time", ""),
             })
 
@@ -235,6 +284,7 @@ async def process_email_with_delay(
         }
 
     return valid_rows, skipped_rows, failed_email
+
 
 def save_to_csv(data: List[Dict], output_filename: str, process_id: str) -> None:
     try:
