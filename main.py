@@ -31,18 +31,17 @@ PORT = int(os.getenv("PORT", 8000))
 # Configure FastAPI app
 app = FastAPI()
 
-# After `app = FastAPI()`
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://bde-frontend-pf3m.onrender.com",
-        "https://bde-project.onrender.com",   # (Allow self-origin too, just to be safe)
+        "https://bde-project.onrender.com",   # Allow backend origin too
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # Logger setup
 logging.basicConfig(level=logging.DEBUG)
@@ -53,13 +52,17 @@ BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Process tracking
+# Process tracking dictionary
 process_statuses = {}
 
-# Initialize mappings
+# Initialize mappings on startup
 initialize_mappings()
 
 # --- FastAPI Routes ---
+
+@app.get("/")
+async def root():
+    return {"message": "BDE Parser API is running."}
 
 @app.post("/start-process")
 async def start_process(background_tasks: BackgroundTasks):
@@ -85,7 +88,7 @@ async def get_status(process_id: str):
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    file_path = OUTPUT_DIR / filename
+    file_path = (Path(__file__).parent / "output" / filename).resolve()
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename, media_type="text/csv")
@@ -123,7 +126,7 @@ async def run_processing(process_id: str):
                     failed_email["content"] = email.get("content", "")
                     failed_emails.append(failed_email)
 
-                await asyncio.sleep(2)
+                await asyncio.sleep(2)  # gentle delay between calls
 
             if failed_emails:
                 logger.info(f"Retrying {len(failed_emails)} failed emails...")
