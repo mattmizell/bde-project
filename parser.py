@@ -1,5 +1,3 @@
-# parser.py
-
 import os
 import re
 import imaplib
@@ -161,21 +159,18 @@ def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
         logger.error(f"Failed to fetch emails: {e}")
     return emails
 
-async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession, use_parse: bool) -> Optional[str]:
+async def call_grok_chat_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession) -> Optional[str]:
     try:
-        api_url = "https://api.x.ai/v1/parse" if use_parse else "https://api.x.ai/v1/chat/completions"
+        api_url = "https://api.x.ai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {env['XAI_API_KEY']}", "Content-Type": "application/json"}
-        payload = {"document": content, "instructions": prompt} if use_parse else {"model": env["MODEL"], "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": content}]}
+        payload = {"model": env["MODEL"], "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": content}]}
         async with session.post(api_url, headers=headers, json=payload) as response:
             response.raise_for_status()
             raw_text = await response.text()
         data = json.loads(raw_text)
-        if use_parse:
-            return json.dumps(data.get("data", []))
-        else:
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
     except Exception as e:
-        logger.error(f"Grok API call failed: {e}")
+        logger.error(f"Grok Chat API call failed: {e}")
         return None
 
 async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str, session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
@@ -185,19 +180,17 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         if not content:
             raise ValueError("Empty email content")
         is_opis = "OPIS" in content and ("Rack" in content or "Wholesale" in content) and "Effective Date" in content
-        prompt_file_parse = "opis_parse_prompt.txt" if is_opis else "supplier_parse_prompt.txt"
-        prompt_file_chat = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
-        prompt_parse = load_prompt(prompt_file_parse)
-        prompt_chat = load_prompt(prompt_file_chat)
 
-        parsed = await call_grok_api(prompt_parse, content, env, session, use_parse=True)
-        if not parsed:
-            parsed = await call_grok_api(prompt_chat, content, env, session, use_parse=False)
-        if parsed.startswith("```json"):
+        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
+        prompt = load_prompt(prompt_file)
+
+        parsed = await call_grok_chat_api(prompt, content, env, session)
+        if parsed and parsed.startswith("```json"):
             match = re.search(r"```json\s*(.*?)\s*```", parsed, re.DOTALL)
             if match:
                 parsed = match.group(1).strip()
         rows = json.loads(parsed)
+
         for row in rows:
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
@@ -222,6 +215,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
     env = load_env()
     emails = fetch_emails(env, process_id)
     process_statuses[process_id]["email_count"] = len(emails)
+
     if not emails:
         process_statuses[process_id]["status"] = "done"
         return
