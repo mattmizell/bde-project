@@ -147,86 +147,59 @@ async def process_email_with_delay(
         if not email_content:
             raise ValueError("No content found in email")
 
-        prompt = f"""You are an expert at parsing complex fuel supplier emails and structured rack reports.
+        # --- Detect if OPIS Rack report or normal supplier email ---
+        is_opis = (
+            "OPIS" in email_content and
+            ("Rack" in email_content or "Wholesale" in email_content) and
+            "Effective Date" in email_content
+        )
 
-You must extract **strict structured pricing information** into a pure JSON array.
+        # --- Build the correct prompt based on detection ---
+        if is_opis:
+            logger.info(f"Process {process_id}: Detected OPIS rack report for email {email.get('uid', '?')}")
+            prompt = (
+                "You are an expert at extracting pricing information from OPIS Rack Price Reports.\n\n"
+                "Extract the following fields for each product listed:\n"
+                "- Supplier: Supplier from the 'Supplier:' field\n"
+                "- Supply: Same as Supplier unless otherwise indicated\n"
+                "- Product Name: Specific fuel product name\n"
+                "- Terminal: City or terminal name from header\n"
+                "- Price: Rack Avg or Spot Mean price (numeric)\n"
+                "- Volume Type: Set 'Contract' unless otherwise stated\n"
+                "- Effective Date: YYYY-MM-DD format\n"
+                "- Effective Time: HH:MM format (24-hour)\n\n"
+                "⚡ Important Rules:\n"
+                "- Output MUST be pure JSON array with no extra text.\n"
+                "- Missing fields must be set as `null`.\n"
+                "- Repeat Terminal and Supplier as needed.\n"
+                "- Inherit Effective Date/Time if not explicitly repeated.\n"
+                "- Prioritize Rack Avg price.\n\n"
+                "Here is the OPIS Rack report content:\n\n"
+                f"{email_content}"
+            )
+        else:
+            logger.info(f"Process {process_id}: Detected Supplier Pricing Email for {email.get('uid', '?')}")
+            prompt = (
+                "You are an expert at extracting pricing information from complex supplier pricing emails for petroleum products.\n\n"
+                "Extract the following fields for each product listed:\n"
+                "- Supplier: Company that sent the email\n"
+                "- Supply: Position holder if clearly stated; otherwise null\n"
+                "- Product Name: Fuel product name\n"
+                "- Terminal: Terminal or city name\n"
+                "- Price: Numeric value only\n"
+                "- Volume Type: Spot, Rack, or Contract (or null if missing)\n"
+                "- Effective Date: YYYY-MM-DD format\n"
+                "- Effective Time: HH:MM format (24-hour) or null\n\n"
+                "⚡ Important Rules:\n"
+                "- Output MUST be pure JSON array.\n"
+                "- Set missing fields to `null`.\n"
+                "- Split Supply and Terminal if combined.\n"
+                "- Do not invent missing fields. Only extract what is clear.\n\n"
+                "Here is the email content:\n\n"
+                f"{email_content}"
+            )
 
-### Extract the following fields:
-- Supplier: The marketing company sending the email (e.g., Wallis, Luke Oil, WFS, Bylo, OPIS).
-- Supply: The **position holder** actually supplying the fuel (e.g., Marathon, Shell, BP, Cenex, PSX, XOM, etc.).
-- Product Name: The name of the product (e.g., 87E10, ULSD, WinterULSD, CBOB, Premium ULSD, Rec Gas 91, etc.).
-- Terminal: The terminal location (e.g., Cahokia, Wood River, St. Louis, Bettendorf).
-- Price: A number (no strings, no symbols).
-- Volume Type: If mentioned, specify (Rack, Contract, Spot). If not mentioned, set to null.
-- Effective Date: The date pricing is effective (Format: YYYY-MM-DD).
-- Effective Time: The time pricing is effective (24-hour clock, format HH:MM).
-
-### Important Parsing Instructions:
-- If Supplier and Supply are combined in a line (e.g., 'PSX Cahokia'), separate them: Supply = 'PSX', Terminal = 'Cahokia'.
-- Use knowledge of major fuel companies to infer Supply when possible.
-- If no explicit Effective Date is mentioned, fallback to the email sent date provided.
-- If Effective Time is missing, set it to null.
-- Ignore non-pricing related lines (e.g., disclaimers, contact info).
-- If price appears as 9.0000 or 9.9999 or 9.000, assume placeholder and treat carefully (only keep if consistent with other entries).
-- If any field is missing, set it to null.
-
-### OPIS Rack Reports Handling:
-- Parse line-by-line if the input appears tabular.
-- Supplier is the first word in each line.
-- Price is typically numeric after Supplier.
-- Terminal defaults to 'St. Louis, MO' unless otherwise specified.
-- Effective Date/Time is often stated once at the top of the file (e.g., 'Effective 04/26/25 18:00'). Apply it to all lines.
-
-### Output Rules:
-- Return ONLY a pure JSON array.
-- No text outside the array.
-- No Markdown formatting (no "```json" blocks).
-
-### Examples:
-
-**Wallis Email Example:**
-Input:
-Wallis Fuel Pricing: ULSD at Wood River 2.0850 effective 04/26/25 00:01
-
-Output:
-[
-  {{
-    "Supplier": "Wallis",
-    "Supply": "Marathon",
-    "Product Name": "ULSD",
-    "Terminal": "Wood River",
-    "Price": 2.0850,
-    "Volume Type": null,
-    "Effective Date": "2025-04-26",
-    "Effective Time": "00:01"
-  }}
-]
-
-**OPIS Rack File Example:**
-Input:
-Marathon 87E10 Cahokia 2.0655
-
-Output:
-[
-  {{
-    "Supplier": "OPIS",
-    "Supply": "Marathon",
-    "Product Name": "87E10",
-    "Terminal": "Cahokia",
-    "Price": 2.0655,
-    "Volume Type": "Contract",
-    "Effective Date": "2025-04-26",
-    "Effective Time": "18:00"
-  }}
-]
-
----
-
-Here is the content to parse:
-
-{email_content}
-"""
-
+        # --- Send request to Grok API ---
         api_url = "https://api.x.ai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {env['XAI_API_KEY']}",
@@ -250,15 +223,13 @@ Here is the content to parse:
                 logger.error(f"Process {process_id}: JSON decode error on Grok response: {e}")
                 raise
 
-        # Extract the JSON inside ```json ... ``` if it exists
+        # --- Parse the Grok content ---
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
         if content.startswith("```json"):
             match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
             if match:
                 content = match.group(1).strip()
-            else:
-                raise ValueError("Failed to extract JSON block from Grok response")
 
         parsed_data = json.loads(content) if isinstance(content, str) else content
 
