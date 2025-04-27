@@ -92,9 +92,12 @@ async def download_file(filename: str):
 
 async def run_processing(process_id: str):
     try:
-        # ✅ New simpler structure — use unified processing
         await process_all_emails(process_id, process_statuses)
         logger.info(f"Processing complete for process_id {process_id}")
+
+        # ✅ NEW LINE: Small delay to allow frontend to fetch status
+        await asyncio.sleep(5)
+
     except Exception as ex:
         logger.error(f"Processing error: {str(ex)}")
         process_statuses[process_id]["status"] = "error"
