@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from parser import (
     load_env,
     initialize_mappings,
-    process_all_emails,   # ✅ Correct now
+    process_all_emails,
 )
 
 # Load environment variables
@@ -50,7 +50,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 # Initialize mappings at startup
 initialize_mappings()
 
-# --- Process Tracking ---
+# Process Tracking
 process_statuses = {}
 
 # --- FastAPI Routes ---
@@ -58,6 +58,7 @@ process_statuses = {}
 @app.get("/")
 async def root():
     return {"message": "BDE Parser API is running."}
+
 
 @app.post("/start-process")
 async def start_process(background_tasks: BackgroundTasks):
@@ -74,12 +75,14 @@ async def start_process(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_processing, process_id)
     return {"process_id": process_id}
 
+
 @app.get("/status/{process_id}")
 async def get_status(process_id: str):
     status = process_statuses.get(process_id)
     if not status:
         raise HTTPException(status_code=404, detail="Invalid process ID")
     return status
+
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
@@ -88,17 +91,14 @@ async def download_file(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename, media_type="text/csv")
 
-# --- Background Processing Task ---
+
+# --- Background Email Processing Task ---
 
 async def run_processing(process_id: str):
     try:
         await process_all_emails(process_id, process_statuses)
-        logger.info(f"Processing complete for process_id {process_id}")
-
-        # ✅ NEW LINE: Small delay to allow frontend to fetch status
-        await asyncio.sleep(5)
-
+        logger.info(f"✅ Processing complete for process_id {process_id}")
     except Exception as ex:
-        logger.error(f"Processing error: {str(ex)}")
+        logger.exception(f"❌ Processing error for process_id {process_id}: {str(ex)}")
         process_statuses[process_id]["status"] = "error"
         process_statuses[process_id]["error"] = str(ex)
