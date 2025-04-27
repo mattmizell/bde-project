@@ -180,14 +180,25 @@ async def process_email_with_delay(
         if is_opis:
             logger.info(f"Detected OPIS rack report for {email.get('uid', '?')}")
             prompt = (
-                "You are an expert at extracting pricing information from OPIS Rack Price Reports for Better Day Energy.\n\n"
-                "Extract the following fields for each product listed:\n"
-                "- Supplier\n- Supply (same as Supplier unless otherwise stated)\n"
-                "- Product Name\n- Terminal\n- Price (Rack Avg preferred)\n"
-                "- Volume Type ('Contract')\n- Effective Date\n- Effective Time\n\n"
-                "⚡ Output pure JSON array only.\n"
-                "⚡ Missing fields must be set to null.\n\n"
-                "Email Content:\n\n"
+                "You are an expert data extractor for OPIS Rack Pricing Reports.\n\n"
+                "Extract the following fields **exactly as described** for each product listed:\n"
+                "- Supplier: Supplier or Position Holder (if both shown, prefer Supplier)\n"
+                "- Supply: Same as Supplier unless a different Position Holder is clearly stated\n"
+                "- Product Name: The full product name exactly as listed\n"
+                "- Terminal: Terminal or City name listed in section headers\n"
+                "- Price: Rack Average price (choose Rack Avg. If missing, fallback to Spot Mean)\n"
+                "- Volume Type: Always set to 'Contract'\n"
+                "- Effective Date: Date the prices apply, in YYYY-MM-DD format\n"
+                "- Effective Time: Always set to '00:01' unless otherwise indicated\n\n"
+                "⚡ Important Rules:\n"
+                "- Always output pure JSON array without any extra text.\n"
+                "- If Supplier or Terminal applies to multiple rows, inherit it.\n"
+                "- If a field is missing, set it as null (not empty string).\n"
+                "- Do not guess values. Only use clearly visible data.\n"
+                "- Prioritize 'Rack Avg' prices. Only use 'Spot Mean' if Rack Avg missing.\n"
+                "- If product and price are not clear, skip that row.\n"
+                "- Preserve accurate decimals in prices.\n\n"
+                "Here is the OPIS rack report:\n\n"
                 f"{email_content}"
             )
         else:
