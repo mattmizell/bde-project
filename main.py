@@ -1,10 +1,11 @@
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
 from parser import (
     process_all_emails,
     initialize_mappings,
     load_process_status,
-    delete_process_status,  # Ensure this is imported
+    delete_process_status,
     load_env
 )
 from uuid import uuid4
@@ -14,7 +15,17 @@ import logging
 # Load environment variables
 load_env()  # Ensure environment variables are loaded
 
+# Initialize FastAPI app
 app = FastAPI()
+
+# CORS configuration to allow requests from your frontend domain
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://bde-frontend-pf3m.onrender.com"],  # Allow frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 # Initialize mappings at startup
 @app.on_event("startup")
