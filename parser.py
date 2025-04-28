@@ -15,7 +15,7 @@ from email import policy
 from email.parser import BytesParser
 
 # --- Config ---
-BASE_DIR: Path = Path(__file__).parent  # Define BASE_DIR at the start
+BASE_DIR: Path = Path(__file__).parent
 
 OUTPUT_DIR: Path = BASE_DIR / "output"
 PROMPT_DIR: Path = BASE_DIR / "prompts"
@@ -23,11 +23,10 @@ SUPPLIER_PROMPT_FILE = PROMPT_DIR / "supplier_chat_prompt.txt"
 OPIS_PROMPT_FILE = PROMPT_DIR / "opis_chat_prompt.txt"
 
 IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
-EMAIL_ACCOUNT = os.getenv("IMAP_USERNAME")  # Use your existing IMAP_USERNAME
-EMAIL_PASSWORD = os.getenv("IMAP_PASSWORD")  # Use your existing IMAP_PASSWORD
-GROK_API_KEY = os.getenv("XAI_API_KEY")  # Use your existing XAI_API_KEY
+EMAIL_ACCOUNT = os.getenv("IMAP_USERNAME")
+EMAIL_PASSWORD = os.getenv("IMAP_PASSWORD")
+GROK_API_KEY = os.getenv("XAI_API_KEY")
 
-# API endpoint and model for Grok
 GROK_API_URL = "https://api.x.ai/v1/chat/completions"
 GROK_MODEL = "grok-3-latest"
 
@@ -35,14 +34,13 @@ GROK_MODEL = "grok-3-latest"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-process_status = {}  # Track background process states
+process_status = {}
 
 # Configure logger
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("parser")
 
 # Output and Prompts directory
-BASE_DIR: Path = BASE_DIR
 OUTPUT_DIR: Path = BASE_DIR / "output"
 PROMPTS_DIR: Path = BASE_DIR / "prompts"
 STATE_DIR: Path = BASE_DIR / "state"
@@ -61,15 +59,29 @@ SUPPLIER_MAPPING: Dict[str, str] = {}
 PRODUCT_MAPPING: Dict[str, str] = {}
 TERMINAL_MAPPING: List[Dict[str, str]] = []
 
-# Expected price range for validation
 EXPECTED_PRICE_RANGE = {"E10": (1.50, 4.00), "ULSD": (1.80, 3.50)}
 PRICE_TOLERANCE = 0.01
 REQUIRED_PRODUCTS = ["ULSD", "87E10"]
 
-# --- State Persistence Functions ---
+# --- File Logging Setup ---
+def setup_file_logging(process_id: str) -> logging.Handler:
+    """Set up a file handler for detailed logging."""
+    log_file = OUTPUT_DIR / f"debug_{process_id}.txt"
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.info(f"Logging to file: {log_file}")
+    return file_handler
 
+def remove_file_logging(handler: logging.Handler) -> None:
+    """Remove the file handler after processing."""
+    logger.removeHandler(handler)
+    handler.close()
+
+# --- State Persistence Functions ---
 def save_process_status(process_id: str, status: Dict) -> None:
-    """Save the process status to a file."""
     try:
         state_file = STATE_DIR / f"process_{process_id}.json"
         with open(state_file, "w", encoding="utf-8") as f:
@@ -80,7 +92,6 @@ def save_process_status(process_id: str, status: Dict) -> None:
         raise
 
 def load_process_status(process_id: str) -> Optional[Dict]:
-    """Load the process status from a file."""
     state_file = STATE_DIR / f"process_{process_id}.json"
     if state_file.exists():
         with open(state_file, "r", encoding="utf-8") as f:
@@ -88,14 +99,12 @@ def load_process_status(process_id: str) -> Optional[Dict]:
     return None
 
 def delete_process_status(process_id: str) -> None:
-    """Delete the process status file."""
     state_file = STATE_DIR / f"process_{process_id}.json"
     if state_file.exists():
         state_file.unlink()
         logger.info(f"Deleted status file for process {process_id}")
 
 # --- Utilities ---
-
 def load_env() -> Dict[str, str]:
     load_dotenv()
     env_vars = {
@@ -132,7 +141,6 @@ def initialize_mappings() -> None:
         })
 
 # --- Email Handling ---
-
 def choose_best_content_from_email(msg) -> str:
     for part in msg.walk():
         filename = part.get_filename()
@@ -156,13 +164,12 @@ def clean_email_content(content: str) -> str:
         content = re.sub(r"\n{3,}", "\n\n", content)
         cleaned = "\n".join(line.strip() for line in content.splitlines())
         logger.debug(f"Cleaned content length: {len(cleaned)}")
-        return cleaned  # Removed [:6000] limit
+        return cleaned
     except Exception as e:
         logger.error(f"Failed to clean content: {e}")
         return content
 
 # --- IMAP Functions ---
-
 def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
     emails = []
     try:
@@ -201,7 +208,6 @@ def mark_email_as_processed(uid: str, env: Dict[str, str]) -> None:
         logger.error(f"Failed to mark processed: {e}")
 
 # --- Grok API Functions ---
-
 def load_prompt(filename: str) -> str:
     prompt_path = PROMPT_DIR / filename
     with open(prompt_path, "r", encoding="utf-8") as f:
@@ -228,7 +234,6 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
         return None
 
 # --- Processing Functions ---
-
 async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str, session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
     valid_rows, skipped_rows, failed_email = [], [], None
     try:
@@ -238,6 +243,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
         is_opis = "OPIS" in content and ("Rack" in content or "Wholesale" in content) and "Effective Date" in content
         logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
+        logger.debug(f"Email subject: {email.get('subject', '')}")
         logger.debug(f"Email content (first 500 chars): {content[:500]}")
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
@@ -280,9 +286,10 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
     return valid_rows, skipped_rows, failed_email
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
+    # Set up file logging for this process
+    file_handler = setup_file_logging(process_id)
     try:
         env = load_env()
-        # Initialize and save status file immediately
         initial_status = {
             "status": "running",
             "email_count": 0,
@@ -290,6 +297,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
             "row_count": 0,
             "output_file": None,
             "error": None,
+            "debug_log": f"debug_{process_id}.txt",  # Add debug log filename to status
         }
         process_statuses[process_id] = initial_status
         save_process_status(process_id, initial_status)
@@ -341,9 +349,11 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
         process_statuses[process_id]["status"] = "error"
         process_statuses[process_id]["error"] = str(e)
         save_process_status(process_id, process_statuses[process_id])
+    finally:
+        # Remove the file handler to avoid memory leaks
+        remove_file_logging(file_handler)
 
 # --- CSV Saving Functions ---
-
 def save_to_csv(data: List[Dict], output_filename: str, process_id: str) -> None:
     try:
         output_path = OUTPUT_DIR / output_filename
