@@ -1,512 +1,188 @@
-# parser.py (Updated with Fixes for Deployment Issues)
-
-import os
-import re
+# parser.py
 import imaplib
-import aiohttp
-import asyncio
-import logging
+import email
+from email.header import decode_header
+import os
+import requests
 import pandas as pd
+import re
+from datetime import datetime
 import json
-import csv
-from typing import Dict, List, Tuple, Optional
-from datetime import datetime, timedelta
 from pathlib import Path
-from dotenv import load_dotenv
-from email import policy
-from email.parser import BytesParser
+import logging
 
-# Configure logger
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger("parser")
+# --- Config ---
+IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
+EMAIL_ACCOUNT = os.getenv("IMAP_USERNAME")  # Use your existing IMAP_USERNAME
+EMAIL_PASSWORD = os.getenv("IMAP_PASSWORD")  # Use your existing IMAP_PASSWORD
+GROK_API_KEY = os.getenv("XAI_API_KEY")  # Use your existing XAI_API_KEY
+OUTPUT_DIR = Path("output")
+PROMPT_DIR = Path("prompts")
+SUPPLIER_PROMPT_FILE = PROMPT_DIR / "supplier_chat_prompt.txt"
+OPIS_PROMPT_FILE = PROMPT_DIR / "opis_chat_prompt.txt"
 
-# Output and Prompts directory
-BASE_DIR: Path = Path(__file__).parent
-OUTPUT_DIR: Path = BASE_DIR / "output"
-PROMPTS_DIR: Path = BASE_DIR / "prompts"
-STATE_DIR: Path = BASE_DIR / "state"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-STATE_DIR.mkdir(parents=True, exist_ok=True)
+# API endpoint and model for Grok
+GROK_API_URL = "https://api.x.ai/v1/chat/completions"
+GROK_MODEL = "grok-3-latest"
 
-# Global mappings
-SUPPLIER_MAPPING: Dict[str, str] = {}
-PRODUCT_MAPPING: Dict[str, str] = {}
-TERMINAL_MAPPING: List[Dict[str, str]] = []
+# --- Setup ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Expected price range for validation
-EXPECTED_PRICE_RANGE = {"E10": (1.50, 4.00), "ULSD": (1.80, 3.50)}
-PRICE_TOLERANCE = 0.01
-REQUIRED_PRODUCTS = ["ULSD", "87E10"]
+process_status = {}  # Track background process states
 
+# --- Utilities ---
 
-# --- State Persistence Functions ---
+def initialize_mappings():
+    """Placeholder for future supplier/product mappings."""
+    logger.info("Mappings initialized (placeholder)")
 
-def save_process_status(process_id: str, status: Dict) -> None:
-    """Save the process status to a file."""
-    state_file = STATE_DIR / f"process_{process_id}.json"
-    with open(state_file, "w", encoding="utf-8") as f:
-        json.dump(status, f)
+def load_process_status(process_id):
+    return process_status.get(process_id)
 
+def delete_process_status(process_id):
+    if process_id in process_status:
+        del process_status[process_id]
 
-def load_process_status(process_id: str) -> Optional[Dict]:
-    """Load the process status from a file."""
-    state_file = STATE_DIR / f"process_{process_id}.json"
-    if state_file.exists():
-        with open(state_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
+def clean_email_content(content):
+    """General email body cleaner."""
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
+    content = re.sub(r"[ \t]+", " ", content)
+    content = re.sub(r"\n{2,}", "\n", content)
+    return content.strip()
 
+def clean_opis_content(content):
+    """Specific cleaner for OPIS reports."""
+    content = re.sub(
+        r"(?i)^\s*(LOW RACK|HIGH RACK|RACK AVG|BRD LOW RACK|BRD HIGH RACK|BRD RACK AVG|SPOT MEAN|FOB COLONIAL|FOB ST\. LOUIS|CONT AVG.*|CONT LOW.*|CONT HIGH.*|ADDITIONAL CONTRACT SUMMARY.*|UBD.*|BRD.*|ST\. LOUIS, MO-IL.*)$",
+        "",
+        content,
+        flags=re.MULTILINE
+    )
+    content = re.sub(r"[ ]{2,}", " ", content)
+    content = re.sub(r"\n{2,}", "\n", content)
+    return content.strip()
 
-def delete_process_status(process_id: str) -> None:
-    """Delete the process status file."""
-    state_file = STATE_DIR / f"process_{process_id}.json"
-    if state_file.exists():
-        state_file.unlink()
-
-
-# --- Setup Functions ---
-
-def load_env() -> Dict[str, str]:
-    load_dotenv()
-    env_vars = {
-        "IMAP_SERVER": os.getenv("IMAP_SERVER", "imap.gmail.com"),
-        "IMAP_USERNAME": os.getenv("IMAP_USERNAME", ""),
-        "IMAP_PASSWORD": os.getenv("IMAP_PASSWORD", ""),
-        "XAI_API_KEY": os.getenv("XAI_API_KEY", ""),
-        "MODEL": os.getenv("MODEL", "grok-3-latest"),
+def call_grok_api(content, prompt_file):
+    """Call Grok 3 API manually."""
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {GROK_API_KEY}"
     }
-    for key, value in env_vars.items():
-        if not value:
-            raise ValueError(f"Missing environment variable: {key}")
-    return env_vars
 
+    with open(prompt_file, "r") as f:
+        prompt = f.read()
 
-def initialize_mappings() -> None:
-    global SUPPLIER_MAPPING, PRODUCT_MAPPING, TERMINAL_MAPPING
-    mappings_file = BASE_DIR / "mappings.xlsx"
-    if not mappings_file.exists():
-        raise FileNotFoundError(f"Mappings file not found: {mappings_file}")
+    body = {
+        "model": GROK_MODEL,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": content}
+        ],
+        "temperature": 0,
+        "max_tokens": 4096
+    }
 
-    df_suppliers = pd.read_excel(mappings_file, sheet_name="SupplierMappings")
-    SUPPLIER_MAPPING = dict(zip(df_suppliers["Raw Value"], df_suppliers["Standardized Value"]))
+    response = requests.post(GROK_API_URL, headers=headers, json=body)
 
-    df_products = pd.read_excel(mappings_file, sheet_name="ProductMappings")
-    PRODUCT_MAPPING = dict(zip(df_products["Raw Value"], df_products["Standardized Value"]))
+    if response.status_code != 200:
+        raise Exception(f"Grok API Error: {response.status_code}: {response.text}")
 
-    df_terminals = pd.read_excel(mappings_file, sheet_name="TerminalMappings")
-    TERMINAL_MAPPING = []
-    for _, row in df_terminals.iterrows():
-        TERMINAL_MAPPING.append({
-            "raw_value": str(row["Raw Value"]),
-            "standardized_value": str(row["Standardized Value"]),
-            "condition": str(row.get("Condition", "")) if pd.notna(row.get("Condition")) else None
-        })
+    reply = response.json()['choices'][0]['message']['content']
+    return json.loads(reply)
 
+# --- Main Email Processing ---
 
-def apply_translations(row: Dict, supplier_mapping: Dict, product_mapping: Dict, terminal_mapping: List[Dict]) -> Dict:
-    row["Supplier"] = supplier_mapping.get(row.get("Supplier", ""), row.get("Supplier", ""))
-    row["Supply"] = supplier_mapping.get(row.get("Supply", ""), row.get("Supply", ""))
-    row["Product Name"] = product_mapping.get(row.get("Product Name", ""), row.get("Product Name", ""))
+def process_all_emails(process_id):
+    logger.info(f"Started processing emails with process_id={process_id}")
+    process_status[process_id] = {
+        "status": "processing",
+        "email_count": 0,
+        "current_email": 0,
+        "row_count": 0,
+        "output_file": None
+    }
 
-    terminal = row.get("Terminal", "")
-    for term_map in terminal_mapping:
-        if term_map["raw_value"] == terminal:
-            if term_map["condition"]:
-                if "Supplier in" in term_map["condition"]:
-                    allowed_suppliers = eval(term_map["condition"].split("in")[1].strip())
-                    if row["Supplier"] in allowed_suppliers:
-                        row["Terminal"] = term_map["standardized_value"]
-                        break
-                elif "Supplier not in" in term_map["condition"]:
-                    disallowed_suppliers = eval(term_map["condition"].split("in")[1].strip())
-                    if row["Supplier"] not in disallowed_suppliers:
-                        row["Terminal"] = term_map["standardized_value"]
-                        break
-            else:
-                row["Terminal"] = term_map["standardized_value"]
-                break
-    return row
-
-
-# --- Preprocessing Functions ---
-
-def preprocess_content(content: str) -> str:
-    if not content.endswith('\n'):
-        content += '"\n'
-    content = content.replace('-- --', 'N/A')
-    content = content.replace('+++', 'N/A')
-    return content
-
-
-def extract_date(content: str, default_date="2025-04-26", default_time="00:01") -> Tuple[str, str]:
-    date_match = re.search(r'(\d{2}/\d{2}/\d{2}) (\d{2}:\d{2}:\d{2}) EDT', content)
-    if date_match:
-        date_str, time_str = date_match.groups()
-        date = f"2025-{date_str[0:2]}-{date_str[3:5]}"
-        return date, time_str[:5]
-    return default_date, default_time
-
-
-# --- Fallback Parsing for By-Lo Oil ---
-
-def fallback_parse_bylo(content: str, effective_date: str, effective_time: str) -> List[Dict]:
-    """Fallback parsing for By-Lo Oil to ensure all terminals are captured."""
-    rows = []
-    current_terminal = None
-    lines = content.splitlines()
-    for line in lines:
-        line = line.strip()
-        if not line or '----' in line:
-            continue
-        if line.startswith(('IL', 'IA')):
-            parts = line.split()
-            if len(parts) >= 5:
-                current_terminal = ' '.join(parts[:4 if 'IL' in line else 5])
-                continue
-        if current_terminal and len(line.split()) >= 5:
-            product_data = line.split()
-            product = product_data[0]
-            try:
-                price = float(product_data[-1])
-            except ValueError:
-                continue
-            entry = {
-                "Supplier": "By-Lo Oil Company",
-                "Supply": "By-Lo Oil Company",
-                "Product Name": product,
-                "Terminal": current_terminal,
-                "Price": price,
-                "Effective Date": effective_date,
-                "Effective Time": effective_time,
-                "Volume Type": "Contract"
-            }
-            rows.append(entry)
-    return rows
-
-
-# --- Email Handling ---
-
-def choose_best_content_from_email(msg) -> str:
-    for part in msg.walk():
-        filename = part.get_filename()
-        if filename and filename.endswith(".txt"):
-            try:
-                content = part.get_payload(decode=True).decode(errors="ignore")
-                if content.strip():
-                    logger.info(f"Using .txt attachment: {filename}")
-                    return content
-            except Exception as e:
-                logger.error(f"Failed to decode attachment {filename}: {e}")
-    body = msg.get_body(preferencelist=("plain"))
-    if body:
-        return body.get_content().strip()
-    return ""
-
-
-def clean_email_content(content: str) -> str:
-    try:
-        content = content.replace("=\n", "").replace("=20", " ")
-        content = re.sub(r"-{40,}", "", content)
-        content = re.sub(r"\n{3,}", "\n\n", content)
-        cleaned = "\n".join(line.strip() for line in content.splitlines())
-        logger.debug(f"Cleaned content length: {len(cleaned)}")
-        return cleaned
-    except Exception as e:
-        logger.error(f"Failed to clean content: {e}")
-        return content
-
-
-# --- IMAP Functions ---
-
-def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
-    emails = []
-    try:
-        imap_server = imaplib.IMAP4_SSL(env["IMAP_SERVER"])
-        imap_server.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
-        imap_server.select("INBOX")
-        since_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
-        _, msg_nums = imap_server.search(None, f'(SINCE "{since_date}") UNSEEN')
-        for num in msg_nums[0].split():
-            _, data = imap_server.fetch(num, "(RFC822)")
-            msg = BytesParser(policy=policy.default).parsebytes(data[0][1])
-            content = choose_best_content_from_email(msg)
-            subject = msg.get("Subject", "").strip()
-            from_addr = msg.get("From", "").strip()
-            if content:
-                emails.append({
-                    "uid": num.decode(),
-                    "content": content,
-                    "subject": subject,
-                    "from_addr": from_addr,
-                })
-        imap_server.logout()
-    except Exception as e:
-        logger.error(f"Failed to fetch emails: {e}")
-    return emails
-
-
-def mark_email_as_processed(uid: str, env: Dict[str, str]) -> None:
-    try:
-        imap_server = imaplib.IMAP4_SSL(env["IMAP_SERVER"])
-        imap_server.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
-        imap_server.select("INBOX")
-        imap_server.store(uid, '+X-GM-LABELS', 'BDE_Processed')
-        imap_server.logout()
-        logger.info(f"Marked email {uid} as processed")
-    except Exception as e:
-        logger.error(f"Failed to mark processed: {e}")
-
-
-# --- Grok API Functions ---
-
-def load_prompt(filename: str) -> str:
-    prompt_path = PROMPTS_DIR / filename
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession) -> Optional[
-    str]:
-    start_time = datetime.now()
-    try:
-        api_url = "https://api.x.ai/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {env['XAI_API_KEY']}", "Content-Type": "application/json"}
-        payload = {
-            "model": env.get("MODEL", "grok-3-latest"),
-            "messages": [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": content},
-            ]
-        }
-        async with session.post(api_url, headers=headers, json=payload, timeout=60) as response:
-            response.raise_for_status()
-            raw_text = await response.text()
-        data = json.loads(raw_text)
-        duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Grok API call completed in {duration:.2f} seconds")
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
-    except Exception as e:
-        duration = (datetime.now() - start_time).total_seconds()
-        logger.error(f"Grok API call failed after {duration:.2f} seconds: {e}")
-        return None
-
-
-# --- Data Validation and Correction Functions ---
-
-def deduplicate_rows(rows: List[Dict]) -> List[Dict]:
-    seen = set()
-    deduplicated = []
-    for row in rows:
-        key = (row["Supplier"], row["Terminal"], row["Product Name"])
-        if key not in seen:
-            seen.add(key)
-            deduplicated.append(row)
-        else:
-            logger.warning(f"Duplicate entry removed: {key}")
-    return deduplicated
-
-
-def validate_prices(rows: List[Dict]) -> List[Dict]:
-    for row in rows:
-        product = row["Product Name"]
-        price = row["Price"]
-        price_range = None
-        if "E10" in product:
-            price_range = EXPECTED_PRICE_RANGE.get("E10")
-        elif "ULSD" in product:
-            price_range = EXPECTED_PRICE_RANGE.get("ULSD")
-
-        if price_range and (price < price_range[0] or price > price_range[1]):
-            logger.warning(f"Outlier price detected: {product} at {row['Terminal']} - Price: {price}")
-            row["Price"] = None
-    return rows
-
-
-def handle_price_discrepancies(rows: List[Dict], tolerance: float = PRICE_TOLERANCE) -> List[Dict]:
-    grouped_by_key = {}
-    for row in rows:
-        key = (row["Terminal"], row["Product Name"])
-        grouped_by_key.setdefault(key, []).append(row)
-
-    for key, entries in grouped_by_key.items():
-        if len(entries) > 1:
-            prices = [e["Price"] for e in entries if e["Price"] is not None]
-            if prices and max(prices) - min(prices) <= tolerance:
-                avg_price = sum(prices) / len(prices)
-                for entry in entries:
-                    entry["Price"] = avg_price
-            elif prices:
-                logger.warning(f"Price discrepancy exceeds tolerance at {key}: {prices}")
-    return rows
-
-
-def ensure_required_products(rows: List[Dict], required_products: List[str] = REQUIRED_PRODUCTS) -> List[Dict]:
-    grouped_by_terminal = {}
-    for row in rows:
-        key = (row["Supplier"], row["Terminal"])
-        grouped_by_terminal.setdefault(key, []).append(row["Product Name"])
-
-    for (supplier, terminal), products in grouped_by_terminal.items():
-        for required in required_products:
-            if required not in products:
-                rows.append({
-                    "Supplier": supplier,
-                    "Supply": supplier,
-                    "Product Name": required,
-                    "Terminal": terminal,
-                    "Price": None,
-                    "Volume Type": "Contract",
-                    "Effective Date": rows[0]["Effective Date"],
-                    "Effective Time": rows[0]["Effective Time"],
-                })
-                logger.warning(f"Added placeholder for missing product {required} at {terminal} for {supplier}")
-    return rows
-
-
-# --- Processing Functions ---
-
-async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str,
-                                   session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
-    valid_rows, skipped_rows, failed_email = [], [], None
-    try:
-        content = clean_email_content(email.get("content", ""))
-        if not content:
-            raise ValueError("Empty email content")
-
-        content = preprocess_content(content)
-        effective_date, effective_time = extract_date(content)
-
-        is_opis = "OPIS" in content and ("Rack" in content or "Wholesale" in content) and "Effective Date" in content
-        logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
-        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
-        prompt_chat = load_prompt(prompt_file)
-
-        parsed = await call_grok_api(prompt_chat, content, env, session)
-        logger.debug(f"Grok raw response: {parsed[:1000]}...")  # Log first 1000 chars
-        if parsed.startswith("```json"):
-            match = re.search(r"```json\s*(.*?)\s*```", parsed, re.DOTALL)
-            if match:
-                parsed = match.group(1).strip()
-
-        try:
-            rows = json.loads(parsed)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parsing error: {e}")
-            last_valid = parsed[:e.pos]
-            rows = json.loads(last_valid + ']}')
-
-        logger.debug(f"Parsed {len(rows)} rows from email UID {email.get('uid', '?')}")
-
-        # Fallback parsing for By-Lo Oil if not all rows are captured
-        if "By-Lo Oil Company" in content and len(rows) < 10:  # Expect 10 rows
-            logger.warning(f"By-Lo Oil parsed only {len(rows)} rows, expected 10. Using fallback parsing.")
-            fallback_rows = fallback_parse_bylo(content, effective_date, effective_time)
-            if len(fallback_rows) > len(rows):
-                rows = fallback_rows
-                logger.info(f"Fallback parsing captured {len(rows)} rows for By-Lo Oil")
-
-        for row in rows:
-            row = apply_translations(row, SUPPLIER_MAPPING, PRODUCT_MAPPING, TERMINAL_MAPPING)
-            row["Effective Date"] = effective_date
-            row["Effective Time"] = effective_time
-            valid_rows.append({
-                "Supplier": row.get("Supplier", ""),
-                "Supply": row.get("Supply", ""),
-                "Product Name": row.get("Product Name", ""),
-                "Terminal": row.get("Terminal", ""),
-                "Price": row.get("Price", 0),
-                "Volume Type": row.get("Volume Type", ""),
-                "Effective Date": row.get("Effective Date", ""),
-                "Effective Time": row.get("Effective Time", ""),
-            })
-
-        valid_rows = deduplicate_rows(valid_rows)
-        valid_rows = validate_prices(valid_rows)
-        valid_rows = handle_price_discrepancies(valid_rows)
-        valid_rows = ensure_required_products(valid_rows)
-
-        if valid_rows:
-            mark_email_as_processed(email.get("uid", ""), env)
-
-    except Exception as ex:
-        failed_email = {"email_id": email.get("uid", "?"), "subject": email.get("subject", ""),
-                        "from_addr": email.get("from_addr", ""), "error": str(ex)}
-        logger.error(f"Failed to process email UID {email.get('uid', '?')}: {str(ex)}")
-    return valid_rows, skipped_rows, failed_email
-
-
-# In parser.py (already updated, just confirming the relevant part)
-async def process_all_emails(process_id: str) -> None:
-    env = load_env()
-    process_status = {"status": "running", "email_count": 0, "current_email": 0, "row_count": 0}
-    save_process_status(process_id, process_status)
-
-    start_time = datetime.now()
-    emails = fetch_emails(env, process_id)
-    process_status["email_count"] = len(emails)
-    save_process_status(process_id, process_status)
-
-    if not emails:
-        process_status["status"] = "done"
-        save_process_status(process_id, process_status)
-        return
-
-    output_file = f"parsed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    total_rows = 0
+    output_rows = []
     failed_emails = []
 
-    async with aiohttp.ClientSession() as session:
-        for idx, email in enumerate(emails):
-            process_status["current_email"] = idx + 1
-            save_process_status(process_id, process_status)
-            valid_rows, skipped_rows, failed_email = await process_email_with_delay(email, env, process_id, session)
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    today = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_file = f"parsed_{today}.csv"
+    failed_file = f"failed_{today}.csv"
 
-            if valid_rows:
-                save_to_csv(valid_rows, output_file, process_id)
-                total_rows += len(valid_rows)
-                process_status["row_count"] = total_rows
-                save_process_status(process_id, process_status)
-
-            if failed_email:
-                failed_email["content"] = email.get("content", "")
-                failed_emails.append(failed_email)
-
-            await asyncio.sleep(0.1)
-
-    if failed_emails:
-        save_failed_emails_to_csv(failed_emails, output_file, process_id)
-
-    process_status["status"] = "done"
-    process_status["output_file"] = output_file
-    save_process_status(process_id, process_status)
-
-    duration = (datetime.now() - start_time).total_seconds()
-    logger.info(f"Processed {len(emails)} emails in {duration:.2f} seconds")
-
-# --- CSV Saving Functions ---
-
-def save_to_csv(data: List[Dict], output_filename: str, process_id: str) -> None:
     try:
-        output_path = OUTPUT_DIR / output_filename
-        fieldnames = ["Supplier", "Supply", "Product Name", "Terminal", "Price", "Volume Type", "Effective Date",
-                      "Effective Time"]
-        mode = "a" if output_path.exists() else "w"
-        with open(output_path, mode, newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if mode == "w":
-                writer.writeheader()
-            for row in data:
-                writer.writerow(row)
-    except Exception as e:
-        logger.error(f"Failed to save CSV: {e}")
+        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+        mail.login(EMAIL_ACCOUNT, EMAIL_PASSWORD)
+        mail.select("inbox")
 
+        result, data = mail.search(None, "ALL")
+        email_ids = data[0].split()
+        process_status[process_id]["email_count"] = len(email_ids)
 
-def save_failed_emails_to_csv(failed_emails: List[Dict], output_filename: str, process_id: str) -> None:
-    try:
+        for idx, email_id in enumerate(email_ids):
+            process_status[process_id]["current_email"] = idx + 1
+
+            result, msg_data = mail.fetch(email_id, "(RFC822)")
+            raw_email = msg_data[0][1]
+            msg = email.message_from_bytes(raw_email)
+
+            subject, encoding = decode_header(msg["Subject"])[0]
+            if isinstance(subject, bytes):
+                subject = subject.decode(encoding or "utf-8")
+
+            logger.info(f"Processing email: {subject}")
+
+            # Prefer .txt attachments
+            email_content = None
+            for part in msg.walk():
+                if part.get_filename() and part.get_filename().endswith(".txt"):
+                    email_content = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                    break
+
+            if not email_content:
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        if part.get_content_type() == "text/plain":
+                            email_content = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                            break
+                else:
+                    email_content = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+
+            if not email_content:
+                logger.warning("No content found in email.")
+                continue
+
+            clean_text = clean_email_content(email_content)
+
+            if "opis" in subject.lower():
+                clean_text = clean_opis_content(clean_text)
+                prompt_file = OPIS_PROMPT_FILE
+            else:
+                prompt_file = SUPPLIER_PROMPT_FILE
+
+            try:
+                extracted_rows = call_grok_api(clean_text, prompt_file)
+                output_rows.extend(extracted_rows)
+                process_status[process_id]["row_count"] += len(extracted_rows)
+            except Exception as e:
+                logger.error(f"Failed to parse email {subject}: {str(e)}")
+                failed_emails.append(subject)
+
+        # Save parsed rows
+        if output_rows:
+            pd.DataFrame(output_rows).to_csv(OUTPUT_DIR / output_file, index=False)
+            process_status[process_id]["output_file"] = output_file
+
+        # Save failed emails
         if failed_emails:
-            failed_filename = f"failed_{output_filename}"
-            failed_path = OUTPUT_DIR / failed_filename
-            df_failed = pd.DataFrame(failed_emails)
-            df_failed.to_csv(failed_path, index=False)
+            with open(OUTPUT_DIR / failed_file, "w") as f:
+                for subj in failed_emails:
+                    f.write(f"{subj}\n")
+
+        process_status[process_id]["status"] = "done"
+
     except Exception as e:
-        logger.error(f"Failed to save failed emails: {e}")
+        logger.exception(f"Critical error in processing: {str(e)}")
+        process_status[process_id]["status"] = "error"
+        process_status[process_id]["error"] = str(e)

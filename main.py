@@ -32,19 +32,27 @@ async def handle_options_start_process():
 
 @app.post("/start-process")
 async def start_process(background_tasks: BackgroundTasks):
+    """
+    Start processing emails asynchronously and immediately return process_id.
+    """
     logger.debug("Received POST request to /start-process")
     process_id = str(uuid4())
     logger.debug(f"Generated process_id: {process_id}")
+
+    # Launch background task to process emails
     background_tasks.add_task(process_all_emails, process_id)
-    logger.info("Your service is live 🎉")
-    # Add a 10-second delay to prevent immediate shutdown
-    await asyncio.sleep(10)
+    logger.info("Background task started for email processing.")
+
+    # Immediately return the process ID (no sleep)
     response = {"process_id": process_id}
     logger.debug(f"Returning response: {response}")
     return response
 
 @app.get("/status/{process_id}")
 async def get_status(process_id: str):
+    """
+    Get current status of a background parsing task.
+    """
     logger.debug(f"Received GET request to /status/{process_id}")
     status = load_process_status(process_id)
     if not status:
@@ -54,6 +62,9 @@ async def get_status(process_id: str):
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
+    """
+    Download output CSV or failed CSV by filename.
+    """
     logger.debug(f"Received GET request to /download/{filename}")
     file_path = Path("output") / filename
     if not file_path.exists():
@@ -63,6 +74,9 @@ async def download_file(filename: str):
 
 @app.get("/keep-alive")
 async def keep_alive():
+    """
+    Simple keep-alive endpoint for frontend pinging.
+    """
     logger.debug("Received GET request to /keep-alive")
     return {"status": "alive"}
 
