@@ -4,7 +4,6 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from parser import (
     process_all_emails,
-    initialize_mappings,
     load_process_status,
     delete_process_status,
     load_env,
@@ -34,16 +33,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Initialize mappings at startup
-@app.on_event("startup")
-async def startup_event():
-    try:
-        initialize_mappings()
-        logger.info("Successfully initialized mappings")
-    except Exception as e:
-        logger.error(f"Failed to initialize mappings: {e}")
-        raise
 
 @app.post("/start-process")
 async def start_process(background_tasks: BackgroundTasks):
