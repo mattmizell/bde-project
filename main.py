@@ -2,52 +2,78 @@
 import asyncio
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware  # Add CORS middleware
+from fastapi.middleware.cors import CORSMiddleware
 from parser import process_all_emails, initialize_mappings, load_process_status, delete_process_status
 from uuid import uuid4
 from pathlib import Path
 import logging
 
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 app = FastAPI()
 
-# Add CORS middleware to allow requests from the frontend
+# Add CORS middleware with logging
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://bde-frontend-pf3m.onrender.com"],  # Allow the frontend origin
+    allow_origins=["*"],  # Temporarily allow all origins for debugging
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
+# Log middleware setup
+logger.debug("CORS Middleware configured with allow_origins=['*'], allow_methods=['*'], allow_headers=['*']")
 
 # Initialize mappings at startup
 @app.on_event("startup")
 async def startup_event():
+    logger.info("Starting up application and initializing mappings")
     initialize_mappings()
+
+# Simple endpoint to test CORS without background tasks
+@app.get("/cors-test")
+async def cors_test():
+    logger.debug("Received GET request to /cors-test")
+    return {"message": "CORS test successful"}
+
+@app.options("/start-process")
+async def handle_options_start_process():
+    logger.debug("Handling OPTIONS request for /start-process")
+    return {"status": "ok"}
 
 @app.post("/start-process")
 async def start_process(background_tasks: BackgroundTasks):
+    logger.debug("Received POST request to /start-process")
     process_id = str(uuid4())
     background_tasks.add_task(process_all_emails, process_id)
-    logging.info("Your service is live 🎉")
+    logger.info("Your service is live 🎉")
+    # Add a 10-second delay to prevent immediate shutdown
+    await asyncio.sleep(10)
     return {"process_id": process_id}
 
 @app.get("/status/{process_id}")
 async def get_status(process_id: str):
+    logger.debug(f"Received GET request to /status/{process_id}")
     status = load_process_status(process_id)
     if not status:
+        logger.warning(f"Process {process_id} not found")
         raise HTTPException(status_code=404, detail="Process not found")
     return status
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
+    logger.debug(f"Received GET request to /download/{filename}")
     file_path = Path("output") / filename
     if not file_path.exists():
+        logger.warning(f"File {filename} not found")
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename)
 
 @app.get("/keep-alive")
 async def keep_alive():
-    """Endpoint to keep the server alive during long-running tasks."""
+    logger.debug("Received GET request to /keep-alive")
     return {"status": "alive"}
 
 if __name__ == "__main__":

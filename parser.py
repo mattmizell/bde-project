@@ -435,12 +435,13 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
     return valid_rows, skipped_rows, failed_email
 
 
+# In parser.py (already updated, just confirming the relevant part)
 async def process_all_emails(process_id: str) -> None:
     env = load_env()
-    # Initialize status
     process_status = {"status": "running", "email_count": 0, "current_email": 0, "row_count": 0}
     save_process_status(process_id, process_status)
 
+    start_time = datetime.now()
     emails = fetch_emails(env, process_id)
     process_status["email_count"] = len(emails)
     save_process_status(process_id, process_status)
@@ -470,7 +471,7 @@ async def process_all_emails(process_id: str) -> None:
                 failed_email["content"] = email.get("content", "")
                 failed_emails.append(failed_email)
 
-            await asyncio.sleep(0.5)  # Reduced delay to minimize processing time
+            await asyncio.sleep(0.1)
 
     if failed_emails:
         save_failed_emails_to_csv(failed_emails, output_file, process_id)
@@ -479,6 +480,8 @@ async def process_all_emails(process_id: str) -> None:
     process_status["output_file"] = output_file
     save_process_status(process_id, process_status)
 
+    duration = (datetime.now() - start_time).total_seconds()
+    logger.info(f"Processed {len(emails)} emails in {duration:.2f} seconds")
 
 # --- CSV Saving Functions ---
 
