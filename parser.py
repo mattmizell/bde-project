@@ -93,6 +93,8 @@ def remove_file_logging(handler: logging.Handler) -> None:
 def save_process_status(process_id: str, status: Dict) -> None:
     try:
         state_file = STATE_DIR / f"process_{process_id}.json"
+        # Ensure the directory exists
+        state_file.parent.mkdir(parents=True, exist_ok=True)
         with open(state_file, "w", encoding="utf-8") as f:
             json.dump(status, f)
         logger.debug(f"Saved status for process {process_id} to {state_file}")
@@ -102,16 +104,29 @@ def save_process_status(process_id: str, status: Dict) -> None:
 
 def load_process_status(process_id: str) -> Optional[Dict]:
     state_file = STATE_DIR / f"process_{process_id}.json"
-    if state_file.exists():
-        with open(state_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
+    try:
+        if state_file.exists():
+            with open(state_file, "r", encoding="utf-8") as f:
+                status = json.load(f)
+                logger.debug(f"Loaded status for process {process_id}: {status}")
+                return status
+        else:
+            logger.warning(f"Status file not found for process {process_id}: {state_file}")
+            return None
+    except Exception as e:
+        logger.error(f"Failed to load status for process {process_id}: {e}")
+        return None
 
 def delete_process_status(process_id: str) -> None:
     state_file = STATE_DIR / f"process_{process_id}.json"
-    if state_file.exists():
-        state_file.unlink()
-        logger.info(f"Deleted status file for process {process_id}")
+    try:
+        if state_file.exists():
+            state_file.unlink()
+            logger.info(f"Deleted status file for process {process_id}")
+        else:
+            logger.warning(f"Status file to delete not found for process {process_id}: {state_file}")
+    except Exception as e:
+        logger.error(f"Failed to delete status file for process {process_id}: {e}")
 
 # --- Utilities ---
 def load_env() -> Dict[str, str]:
@@ -363,6 +378,10 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
         process_statuses[process_id]["output_file"] = output_file
         save_process_status(process_id, process_statuses[process_id])
         logger.info(f"Completed process {process_id} with {total_rows} rows")
+
+        # Delay deletion of status file to ensure frontend can retrieve it
+        await asyncio.sleep(30)  # Wait 30 seconds before deleting
+        delete_process_status(process_id)
     except Exception as e:
         logger.error(f"Error in process_all_emails for process {process_id}: {str(e)}")
         process_statuses[process_id]["status"] = "error"
