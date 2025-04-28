@@ -45,4 +45,4 @@ async def download_file(filename: str):
             await f.read()  # Test if file exists
         return FileResponse(file_path, media_type='application/octet-stream', filename=filename)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=404, detail="The file was not found")  # Updated message
