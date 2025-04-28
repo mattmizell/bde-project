@@ -378,6 +378,7 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
         return None
 
 # --- Processing Functions ---
+# --- Processing Functions ---
 async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str, session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
     valid_rows, skipped_rows, failed_email = [], [], None
     try:
@@ -385,58 +386,87 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         if not content:
             raise ValueError("Empty email content")
 
+        logger.debug(f"Cleaned email content for UID {email.get('uid', '?')}: {content}")
+
         mappings = load_mappings("mappings.xlsx")
 
         content_lower = content.lower()
         subject_lower = email.get("subject", "").lower()
-        # Improved OPIS detection: require both "opis" and ("rack" or "wholesale") in either content or subject
         is_opis = (("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
                    ("opis" in subject_lower and ("rack" in subject_lower or "wholesale" in subject_lower))) and \
-                   not ("From:" in content and "wallis" in content_lower)  # Exclude Wallis forwarded emails
+                   not ("From:" in content and "wallis" in content_lower)
         logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
         logger.debug(f"Email subject: {email.get('subject', '')}")
         logger.debug(f"Email content (first 500 chars): {content[:500]}")
-        prompt_file = "prompts/opis_chat_prompt.txt" if is_opis else "prompts/supplier_chat_prompt.txt"
+        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"  # Remove the "prompts/" prefix
+        prompt_path = PROMPT_DIR / prompt_file
+        logger.debug(f"Attempting to load prompt file from: {prompt_path}")  # Log the resolved path
         prompt_chat = load_prompt(prompt_file)
 
-        # Check for forwarded email and extract original sender
+        # Extract supplier from forwarded email or original sender
         email_from = email.get("from_addr", "")
+        supplier = ""
         if "From:" in content:
-            forwarded_from_match = re.search(r"From:\s*(.*?)\s*(?:<[^>]+>|Sent:|$)", content, re.IGNORECASE)
+            forwarded_from_match = re.search(r"From:\s*(.*?)\s*(?:<([^>]+)>|$)", content, re.IGNORECASE)
             if forwarded_from_match:
-                email_from = forwarded_from_match.group(1).strip()
-                logger.debug(f"Extracted original sender for forwarded email UID {email.get('uid', '?')}: {email_from}")
+                name, email_addr = forwarded_from_match.groups()
+                if email_addr:
+                    domain = email_addr.split('@')[-1].split('.')[0]
+                    supplier = domain.replace("wallis", "Wallis Oil Company").replace("bylo", "By-Lo Oil Company").title()
+                    logger.debug(f"Extracted forwarded sender for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
+                else:
+                    supplier = name.strip() if name else email_from
+                    logger.debug(f"No email address in forwarded sender, using name: {supplier}")
             else:
                 supplier_match = re.search(r'^(.*?)(?:\s*<|$)', email_from)
-                email_from = supplier_match.group(1).strip() if supplier_match else email_from
-                logger.debug(f"No forwarded sender found, using email_from: {email_from}")
+                supplier = supplier_match.group(1).strip() if supplier_match else email_from
+                logger.debug(f"No forwarded sender found, using email_from: {supplier}")
         else:
-            supplier_match = re.search(r'^(.*?)(?:\s*<|$)', email_from)
-            email_from = supplier_match.group(1).strip() if supplier_match else email_from
-            logger.debug(f"Using email_from for non-forwarded email UID {email.get('uid', '?')}: {email_from}")
+            supplier_match = re.search(r'^(.*?)\s*(?:<[^>]+>|$)', email_from)
+            if supplier_match and '@' in email_from:
+                email_addr = email_from.split('<')[-1].strip('>')
+                domain = email_addr.split('@')[-1].split('.')[0]
+                supplier = domain.replace("wallis", "Wallis Oil Company").replace("bylo", "By-Lo Oil Company").title()
+                logger.debug(f"Extracted supplier from email domain for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
+            else:
+                supplier = supplier_match.group(1).strip() if supplier_match else email_from
+                logger.debug(f"Using email_from for UID {email.get('uid', '?')}: {supplier}")
 
         parsed = await call_grok_api(prompt_chat, content, env, session, process_id)
+        if parsed is None:
+            raise ValueError("Grok API returned None")
         logger.debug(f"Grok raw response for UID {email.get('uid', '?')}: {parsed}")
+
         if parsed.startswith("```json"):
             match = re.search(r"```json\s*(.*?)\s*```", parsed, re.DOTALL)
             if match:
                 parsed = match.group(1).strip()
+            else:
+                raise ValueError("Failed to extract JSON from Grok response")
 
-        rows = json.loads(parsed)
+        try:
+            rows = json.loads(parsed)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Grok response as JSON for UID {email.get('uid', '?')}: {parsed}")
+            raise ValueError(f"Invalid JSON in Grok response: {str(e)}")
+
         logger.debug(f"Parsed {len(rows)} rows from email UID {email.get('uid', '?')}: {rows}")
         for row in rows:
+            if not isinstance(row, dict):
+                logger.debug(f"Skipping invalid row (not a dict): {row}")
+                continue
             if not row.get("Product Name") or not row.get("Terminal") or not isinstance(row.get("Price"), (int, float)):
-                logger.debug(f"Skipping row due to missing required fields: {row}")
+                logger.debug(f"Skipping row due to missing or invalid required fields: {row}")
                 continue
             price = row.get("Price", 0)
-            if is_opis and price > 10:
+            if price > 10:
                 price = price / 100
                 row["Price"] = price
                 logger.debug(f"Converted price from cents to dollars: {row}")
             if price > 10:
                 logger.debug(f"Skipping row due to price > 10: {row}")
                 continue
-            row = apply_mappings(row, mappings, is_opis, email_from=email_from)
+            row = apply_mappings(row, mappings, is_opis, email_from=supplier)
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
