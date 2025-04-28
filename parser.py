@@ -1,4 +1,4 @@
-# parser.py (FINAL - Only Chat Mode)
+# parser.py (Updated with Fixes)
 
 import os
 import re
@@ -31,6 +31,12 @@ SUPPLIER_MAPPING: Dict[str, str] = {}
 PRODUCT_MAPPING: Dict[str, str] = {}
 TERMINAL_MAPPING: List[Dict[str, str]] = []
 
+# Expected price range for validation
+EXPECTED_PRICE_RANGE = {"E10": (1.50, 4.00), "ULSD": (1.80, 3.50)}  # Adjust based on historical data
+PRICE_TOLERANCE = 0.01  # Tolerance for price discrepancies
+REQUIRED_PRODUCTS = ["ULSD", "87E10"]  # Products expected at each terminal
+
+
 # --- Setup Functions ---
 
 def load_env() -> Dict[str, str]:
@@ -46,6 +52,7 @@ def load_env() -> Dict[str, str]:
         if not value:
             raise ValueError(f"Missing environment variable: {key}")
     return env_vars
+
 
 def initialize_mappings() -> None:
     global SUPPLIER_MAPPING, PRODUCT_MAPPING, TERMINAL_MAPPING
@@ -67,6 +74,7 @@ def initialize_mappings() -> None:
             "standardized_value": str(row["Standardized Value"]),
             "condition": str(row.get("Condition", "")) if pd.notna(row.get("Condition")) else None
         })
+
 
 def apply_translations(row: Dict, supplier_mapping: Dict, product_mapping: Dict, terminal_mapping: List[Dict]) -> Dict:
     # Apply Supplier mapping
@@ -97,6 +105,35 @@ def apply_translations(row: Dict, supplier_mapping: Dict, product_mapping: Dict,
                 break
     return row
 
+
+# --- Preprocessing Functions ---
+
+def preprocess_content(content: str) -> str:
+    """
+    Preprocess the content to handle truncation and special characters.
+    """
+    # Handle truncation by ensuring the last line ends properly
+    if not content.endswith('\n'):
+        content += '"\n'
+
+    # Replace special characters that might break JSON parsing
+    content = content.replace('-- --', 'N/A')
+    content = content.replace('+++', 'N/A')
+    return content
+
+
+def extract_date(content: str, default_date="2025-04-26", default_time="00:01") -> Tuple[str, str]:
+    """
+    Extract the effective date and time from the content, particularly for OPIS files.
+    """
+    date_match = re.search(r'(\d{2}/\d{2}/\d{2}) (\d{2}:\d{2}:\d{2}) EDT', content)
+    if date_match:
+        date_str, time_str = date_match.groups()
+        date = f"2025-{date_str[0:2]}-{date_str[3:5]}"
+        return date, time_str[:5]  # e.g., "2025-04-26", "10:01"
+    return default_date, default_time
+
+
 # --- Email Handling ---
 
 def choose_best_content_from_email(msg) -> str:
@@ -115,6 +152,7 @@ def choose_best_content_from_email(msg) -> str:
         return body.get_content().strip()
     return ""
 
+
 def clean_email_content(content: str) -> str:
     try:
         content = content.replace("=\n", "").replace("=20", " ")
@@ -122,10 +160,11 @@ def clean_email_content(content: str) -> str:
         content = re.sub(r"\n{3,}", "\n\n", content)
         cleaned = "\n".join(line.strip() for line in content.splitlines())
         logger.debug(f"Cleaned content length: {len(cleaned)}")
-        return cleaned  # Removed [:6000] limit
+        return cleaned
     except Exception as e:
         logger.error(f"Failed to clean content: {e}")
         return content
+
 
 # --- IMAP Functions ---
 
@@ -155,6 +194,7 @@ def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
         logger.error(f"Failed to fetch emails: {e}")
     return emails
 
+
 def mark_email_as_processed(uid: str, env: Dict[str, str]) -> None:
     try:
         imap_server = imaplib.IMAP4_SSL(env["IMAP_SERVER"])
@@ -166,6 +206,7 @@ def mark_email_as_processed(uid: str, env: Dict[str, str]) -> None:
     except Exception as e:
         logger.error(f"Failed to mark processed: {e}")
 
+
 # --- Grok API Functions ---
 
 def load_prompt(filename: str) -> str:
@@ -173,7 +214,9 @@ def load_prompt(filename: str) -> str:
     with open(prompt_path, "r", encoding="utf-8") as f:
         return f.read()
 
-async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession) -> Optional[str]:
+
+async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession) -> Optional[
+    str]:
     try:
         api_url = "https://api.x.ai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {env['XAI_API_KEY']}", "Content-Type": "application/json"}
@@ -193,14 +236,106 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
         logger.error(f"Grok API call failed: {e}")
         return None
 
+
+# --- Data Validation and Correction Functions ---
+
+def deduplicate_rows(rows: List[Dict]) -> List[Dict]:
+    """
+    Remove duplicate entries based on Supplier, Terminal, and Product Name.
+    """
+    seen = set()
+    deduplicated = []
+    for row in rows:
+        key = (row["Supplier"], row["Terminal"], row["Product Name"])
+        if key not in seen:
+            seen.add(key)
+            deduplicated.append(row)
+        else:
+            logger.warning(f"Duplicate entry removed: {key}")
+    return deduplicated
+
+
+def validate_prices(rows: List[Dict]) -> List[Dict]:
+    """
+    Validate prices and flag outliers.
+    """
+    for row in rows:
+        product = row["Product Name"]
+        price = row["Price"]
+        price_range = None
+        if "E10" in product:
+            price_range = EXPECTED_PRICE_RANGE.get("E10")
+        elif "ULSD" in product:
+            price_range = EXPECTED_PRICE_RANGE.get("ULSD")
+
+        if price_range and (price < price_range[0] or price > price_range[1]):
+            logger.warning(f"Outlier price detected: {product} at {row['Terminal']} - Price: {price}")
+            row["Price"] = None  # Set to None for downstream handling
+    return rows
+
+
+def handle_price_discrepancies(rows: List[Dict], tolerance: float = PRICE_TOLERANCE) -> List[Dict]:
+    """
+    Handle price discrepancies for the same product and terminal across suppliers.
+    """
+    grouped_by_key = {}
+    for row in rows:
+        key = (row["Terminal"], row["Product Name"])
+        grouped_by_key.setdefault(key, []).append(row)
+
+    for key, entries in grouped_by_key.items():
+        if len(entries) > 1:  # Multiple suppliers for the same product/terminal
+            prices = [e["Price"] for e in entries if e["Price"] is not None]
+            if prices and max(prices) - min(prices) <= tolerance:
+                avg_price = sum(prices) / len(prices)
+                for entry in entries:
+                    entry["Price"] = avg_price
+            elif prices:
+                logger.warning(f"Price discrepancy exceeds tolerance at {key}: {prices}")
+    return rows
+
+
+def ensure_required_products(rows: List[Dict], required_products: List[str] = REQUIRED_PRODUCTS) -> List[Dict]:
+    """
+    Ensure all required products are present for each terminal, adding placeholders if missing.
+    """
+    grouped_by_terminal = {}
+    for row in rows:
+        key = (row["Supplier"], row["Terminal"])
+        grouped_by_terminal.setdefault(key, []).append(row["Product Name"])
+
+    for (supplier, terminal), products in grouped_by_terminal.items():
+        for required in required_products:
+            if required not in products:
+                rows.append({
+                    "Supplier": supplier,
+                    "Supply": supplier,
+                    "Product Name": required,
+                    "Terminal": terminal,
+                    "Price": None,
+                    "Volume Type": "Contract",
+                    "Effective Date": rows[0]["Effective Date"],
+                    "Effective Time": rows[0]["Effective Time"],
+                })
+                logger.warning(f"Added placeholder for missing product {required} at {terminal} for {supplier}")
+    return rows
+
+
 # --- Processing Functions ---
 
-async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str, session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
+async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str,
+                                   session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
     valid_rows, skipped_rows, failed_email = [], [], None
     try:
         content = clean_email_content(email.get("content", ""))
         if not content:
             raise ValueError("Empty email content")
+
+        # Preprocess content to handle truncation and special characters
+        content = preprocess_content(content)
+
+        # Extract date (important for OPIS)
+        effective_date, effective_time = extract_date(content)
 
         is_opis = "OPIS" in content and ("Rack" in content or "Wholesale" in content) and "Effective Date" in content
         logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
@@ -214,11 +349,22 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             if match:
                 parsed = match.group(1).strip()
 
-        rows = json.loads(parsed)
+        # Safely parse JSON to handle potential unterminated strings
+        try:
+            rows = json.loads(parsed)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parsing error: {e}")
+            # Attempt to fix by truncating at the last valid JSON object
+            last_valid = parsed[:e.pos]
+            rows = json.loads(last_valid + ']}')  # Close the JSON array
+
         logger.debug(f"Parsed {len(rows)} rows from email UID {email.get('uid', '?')}")
         for row in rows:
             # Apply mappings to standardize the row
             row = apply_translations(row, SUPPLIER_MAPPING, PRODUCT_MAPPING, TERMINAL_MAPPING)
+            # Override date/time with extracted values
+            row["Effective Date"] = effective_date
+            row["Effective Time"] = effective_time
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
@@ -230,13 +376,21 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
                 "Effective Time": row.get("Effective Time", ""),
             })
 
+        # Post-process the rows
+        valid_rows = deduplicate_rows(valid_rows)  # Remove duplicates
+        valid_rows = validate_prices(valid_rows)  # Flag outliers
+        valid_rows = handle_price_discrepancies(valid_rows)  # Resolve price discrepancies
+        valid_rows = ensure_required_products(valid_rows)  # Add placeholders for missing products
+
         if valid_rows:
             mark_email_as_processed(email.get("uid", ""), env)
 
     except Exception as ex:
-        failed_email = {"email_id": email.get("uid", "?"), "subject": email.get("subject", ""), "from_addr": email.get("from_addr", ""), "error": str(ex)}
+        failed_email = {"email_id": email.get("uid", "?"), "subject": email.get("subject", ""),
+                        "from_addr": email.get("from_addr", ""), "error": str(ex)}
         logger.error(f"Failed to process email UID {email.get('uid', '?')}: {str(ex)}")
     return valid_rows, skipped_rows, failed_email
+
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
     env = load_env()
@@ -272,12 +426,14 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
     process_statuses[process_id]["status"] = "done"
     process_statuses[process_id]["output_file"] = output_file
 
+
 # --- CSV Saving Functions ---
 
 def save_to_csv(data: List[Dict], output_filename: str, process_id: str) -> None:
     try:
         output_path = OUTPUT_DIR / output_filename
-        fieldnames = ["Supplier", "Supply", "Product Name", "Terminal", "Price", "Volume Type", "Effective Date", "Effective Time"]
+        fieldnames = ["Supplier", "Supply", "Product Name", "Terminal", "Price", "Volume Type", "Effective Date",
+                      "Effective Time"]
         mode = "a" if output_path.exists() else "w"
         with open(output_path, mode, newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -287,6 +443,7 @@ def save_to_csv(data: List[Dict], output_filename: str, process_id: str) -> None
                 writer.writerow(row)
     except Exception as e:
         logger.error(f"Failed to save CSV: {e}")
+
 
 def save_failed_emails_to_csv(failed_emails: List[Dict], output_filename: str, process_id: str) -> None:
     try:
