@@ -49,7 +49,7 @@ logger.addHandler(console_handler)
 
 # Output, Prompts, and State directories
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+PROMPT_DIR.mkdir(parents=True, exist_ok=True)  # Fixed: Changed PROMPTS_DIR to PROMPT_DIR
 STATE_DIR: Path = BASE_DIR / "state"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
