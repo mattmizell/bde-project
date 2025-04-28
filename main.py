@@ -20,7 +20,8 @@ load_env()  # Ensure environment variables are loaded
 app = FastAPI()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger(__name__)
 
 # CORS configuration to allow requests from your frontend domain

@@ -238,19 +238,27 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
         is_opis = "OPIS" in content and ("Rack" in content or "Wholesale" in content) and "Effective Date" in content
         logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
+        logger.debug(f"Email content (first 500 chars): {content[:500]}")
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
 
         parsed = await call_grok_api(prompt_chat, content, env, session)
-        logger.debug(f"Grok raw response: {parsed[:1000]}...")  # Log first 1000 chars
+        logger.debug(f"Grok raw response for UID {email.get('uid', '?')}: {parsed}")
         if parsed.startswith("```json"):
             match = re.search(r"```json\s*(.*?)\s*```", parsed, re.DOTALL)
             if match:
                 parsed = match.group(1).strip()
 
         rows = json.loads(parsed)
-        logger.debug(f"Parsed {len(rows)} rows from email UID {email.get('uid', '?')}")
+        logger.debug(f"Parsed {len(rows)} rows from email UID {email.get('uid', '?')}: {rows}")
         for row in rows:
+            # Validate required fields
+            if not row.get("Product Name") or not row.get("Terminal") or not isinstance(row.get("Price"), (int, float)):
+                logger.debug(f"Skipping row due to missing required fields: {row}")
+                continue
+            if row.get("Price", 0) > 10:
+                logger.debug(f"Skipping row due to price > 10: {row}")
+                continue
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
@@ -264,6 +272,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
         if valid_rows:
             mark_email_as_processed(email.get("uid", ""), env)
+            logger.info(f"Successfully parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
 
     except Exception as ex:
         failed_email = {"email_id": email.get("uid", "?"), "subject": email.get("subject", ""), "from_addr": email.get("from_addr", ""), "error": str(ex)}
