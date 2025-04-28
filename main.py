@@ -1,12 +1,22 @@
 import uuid
 import logging
-import asyncio  # Add this import
+import asyncio
 import aiofiles
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware  # Add this import
 from parser import process_all_emails, process_status, load_process_status, logger
 
 app = FastAPI()
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://bde-frontend-pf3m.onrender.com"],  # Allow the frontend origin
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 # Configure logging
 logger.setLevel(logging.INFO)
@@ -45,4 +55,4 @@ async def download_file(filename: str):
             await f.read()  # Test if file exists
         return FileResponse(file_path, media_type='application/octet-stream', filename=filename)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="The file was not found")  # Updated message
+        raise HTTPException(status_code=404, detail="The file was not found")
