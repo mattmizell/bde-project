@@ -31,14 +31,21 @@ GROK_API_URL = "https://api.x.ai/v1/chat/completions"
 GROK_MODEL = "grok-3-latest"
 
 # --- Setup ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 process_status = {}
 
 # Configure logger
-logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("parser")
+logger.setLevel(logging.DEBUG)  # Ensure the logger itself is set to DEBUG
+
+# Remove any existing handlers to avoid conflicts
+logger.handlers = []
+
+# Add a console handler for Render logs
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 # Output and Prompts directory
 OUTPUT_DIR: Path = BASE_DIR / "output"
@@ -68,17 +75,19 @@ def setup_file_logging(process_id: str) -> logging.Handler:
     """Set up a file handler for detailed logging."""
     log_file = OUTPUT_DIR / f"debug_{process_id}.txt"
     file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(logging.DEBUG)  # Ensure file handler captures DEBUG messages
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-    logger.info(f"Logging to file: {log_file}")
+    logger.debug(f"File logging set up for process {process_id} at level {logging.getLevelName(logger.level)}")
+    logger.debug(f"Logging to file: {log_file}")
     return file_handler
 
 def remove_file_logging(handler: logging.Handler) -> None:
     """Remove the file handler after processing."""
     logger.removeHandler(handler)
     handler.close()
+    logger.debug("File logging handler removed")
 
 # --- State Persistence Functions ---
 def save_process_status(process_id: str, status: Dict) -> None:
@@ -297,7 +306,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
             "row_count": 0,
             "output_file": None,
             "error": None,
-            "debug_log": f"debug_{process_id}.txt",  # Add debug log filename to status
+            "debug_log": f"debug_{process_id}.txt",
         }
         process_statuses[process_id] = initial_status
         save_process_status(process_id, initial_status)
@@ -350,7 +359,6 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
         process_statuses[process_id]["error"] = str(e)
         save_process_status(process_id, process_statuses[process_id])
     finally:
-        # Remove the file handler to avoid memory leaks
         remove_file_logging(file_handler)
 
 # --- CSV Saving Functions ---
