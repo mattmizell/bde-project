@@ -68,6 +68,35 @@ def initialize_mappings() -> None:
             "condition": str(row.get("Condition", "")) if pd.notna(row.get("Condition")) else None
         })
 
+def apply_translations(row: Dict, supplier_mapping: Dict, product_mapping: Dict, terminal_mapping: List[Dict]) -> Dict:
+    # Apply Supplier mapping
+    row["Supplier"] = supplier_mapping.get(row.get("Supplier", ""), row.get("Supplier", ""))
+    # Apply Supply mapping (if Supply is null, it defaults to Supplier in the prompt, so we map it here)
+    row["Supply"] = supplier_mapping.get(row.get("Supply", ""), row.get("Supply", ""))
+
+    # Apply Product mapping
+    row["Product Name"] = product_mapping.get(row.get("Product Name", ""), row.get("Product Name", ""))
+
+    # Apply Terminal mapping with condition handling
+    terminal = row.get("Terminal", "")
+    for term_map in terminal_mapping:
+        if term_map["raw_value"] == terminal:
+            if term_map["condition"]:
+                if "Supplier in" in term_map["condition"]:
+                    allowed_suppliers = eval(term_map["condition"].split("in")[1].strip())
+                    if row["Supplier"] in allowed_suppliers:
+                        row["Terminal"] = term_map["standardized_value"]
+                        break
+                elif "Supplier not in" in term_map["condition"]:
+                    disallowed_suppliers = eval(term_map["condition"].split("in")[1].strip())
+                    if row["Supplier"] not in disallowed_suppliers:
+                        row["Terminal"] = term_map["standardized_value"]
+                        break
+            else:
+                row["Terminal"] = term_map["standardized_value"]
+                break
+    return row
+
 # --- Email Handling ---
 
 def choose_best_content_from_email(msg) -> str:
@@ -91,7 +120,9 @@ def clean_email_content(content: str) -> str:
         content = content.replace("=\n", "").replace("=20", " ")
         content = re.sub(r"-{40,}", "", content)
         content = re.sub(r"\n{3,}", "\n\n", content)
-        return "\n".join(line.strip() for line in content.splitlines())[:6000]
+        cleaned = "\n".join(line.strip() for line in content.splitlines())
+        logger.debug(f"Cleaned content length: {len(cleaned)}")
+        return cleaned  # Removed [:6000] limit
     except Exception as e:
         logger.error(f"Failed to clean content: {e}")
         return content
@@ -172,17 +203,22 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             raise ValueError("Empty email content")
 
         is_opis = "OPIS" in content and ("Rack" in content or "Wholesale" in content) and "Effective Date" in content
+        logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
 
         parsed = await call_grok_api(prompt_chat, content, env, session)
+        logger.debug(f"Grok raw response: {parsed[:1000]}...")  # Log first 1000 chars
         if parsed.startswith("```json"):
             match = re.search(r"```json\s*(.*?)\s*```", parsed, re.DOTALL)
             if match:
                 parsed = match.group(1).strip()
 
         rows = json.loads(parsed)
+        logger.debug(f"Parsed {len(rows)} rows from email UID {email.get('uid', '?')}")
         for row in rows:
+            # Apply mappings to standardize the row
+            row = apply_translations(row, SUPPLIER_MAPPING, PRODUCT_MAPPING, TERMINAL_MAPPING)
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
