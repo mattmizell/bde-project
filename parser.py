@@ -49,7 +49,7 @@ logger.addHandler(console_handler)
 
 # Output, Prompts, and State directories
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-PROMPT_DIR.mkdir(parents=True, exist_ok=True)  # Fixed: Changed PROMPTS_DIR to PROMPT_DIR
+PROMPT_DIR.mkdir(parents=True, exist_ok=True)
 STATE_DIR: Path = BASE_DIR / "state"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -180,14 +180,65 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
         logger.error(f"Failed to load mappings from {file_path}: {e}")
         return {"suppliers": {}, "products": {}, "terminals": {}}
 
+# --- Extract Position Holder from Terminal ---
+def extract_position_holder(terminal: str) -> str:
+    # Common position holders
+    position_holders = {
+        "FH": "Flint Hills",
+        "GMK": "Growmark",
+        "SC": "Sinclair",
+        "VL": "Valero",
+        "JDS": "JDS",
+        "MG": "Magellan",
+        "HEP": "Holly Energy Partners",
+        "STL": "St. Louis",
+        "KMEP": "Kinder Morgan Energy Partners",
+        "PSX": "Phillips 66",
+        "Marathon": "Marathon"
+    }
+    # Split terminal by common separators: -, /, commas, and spaces
+    parts = re.split(r'[-/,]|\s+', terminal.strip())
+    # Remove empty parts and normalize
+    parts = [part.strip() for part in parts if part.strip()]
+
+    # Check each part against known position holders
+    for part in parts:
+        if part in position_holders:
+            return position_holders[part]
+        # Also check for prefixes (e.g., "MG" in "MG-BETTENDORF")
+        for prefix, holder in position_holders.items():
+            if part.startswith(prefix) and prefix != "Marathon":  # Marathon is a full match, not a prefix
+                return holder
+
+    # Fallback: Use the last part if no match (e.g., "Marathon" at the end)
+    return parts[-1] if parts else terminal
+
 # --- Apply Mappings to Rows ---
-def apply_mappings(row: Dict, mappings: Dict[str, Dict]) -> Dict:
-    supplier = row.get("Supplier", "")
+def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_from: str) -> Dict:
+    # Supplier: For non-OPIS emails, use the email sender; for OPIS, use the parsed supplier
+    if not is_opis:
+        # Extract supplier from email "From" field (e.g., "Luke Oil Company <email@domain.com>")
+        supplier_match = re.search(r'^(.*?)(?:\s*<|$)', email_from)
+        supplier = supplier_match.group(1).strip() if supplier_match else email_from
+        row["Supplier"] = supplier
+    else:
+        supplier = row.get("Supplier", "")
+
+    # Apply supplier mapping
     if supplier in mappings["suppliers"]:
         row["Supplier"] = mappings["suppliers"][supplier]
-        row["Supply"] = mappings["suppliers"][supplier]
         logger.debug(f"Translated Supplier: {supplier} -> {row['Supplier']}")
 
+    # Supply: Extract position holder from terminal
+    terminal = row.get("Terminal", "")
+    supply = extract_position_holder(terminal)
+    # Apply supplier mapping to supply (position holder)
+    if supply in mappings["suppliers"]:
+        supply = mappings["suppliers"][supply]
+        logger.debug(f"Translated Supply: {supply} -> {mappings['suppliers'][supply]}")
+    row["Supply"] = supply
+
+    # Product mappings
     product = row.get("Product Name", "")
     product_key = product.replace("Gross ", "") if product.startswith("Gross ") else product
     if product_key in mappings["products"]:
@@ -199,7 +250,7 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict]) -> Dict:
             row["Product Name"] = mappings["products"][product_key]
             logger.debug(f"Translated Product: {product} -> {row['Product Name']}")
 
-    terminal = row.get("Terminal", "")
+    # Terminal mappings
     supplier = row.get("Supplier", "")
     if terminal in mappings["terminals"]:
         for mapping in mappings["terminals"][terminal]:
@@ -320,24 +371,8 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
         }
         async with session.post(api_url, headers=headers, json=payload) as response:
             response.raise_for_status()
-            raw_text = await response.text()
-            # Extract rate limit information from headers (assuming xAI provides this)
-            remaining_requests = response.headers.get("X-RateLimit-Remaining", "Unknown")
-            total_requests = response.headers.get("X-RateLimit-Limit", "Unknown")
-            if remaining_requests != "Unknown" and total_requests != "Unknown":
-                try:
-                    remaining_requests = int(remaining_requests)
-                    total_requests = int(total_requests)
-                    # Update process_status with token information
-                    if process_id in process_status:
-                        process_status[process_id]["remaining_requests"] = remaining_requests
-                        process_status[process_id]["total_requests"] = total_requests
-                        save_process_status(process_id, process_status[process_id])
-                        logger.debug(f"Updated token info for process {process_id}: {remaining_requests}/{total_requests} requests remaining")
-                except ValueError:
-                    logger.warning(f"Invalid rate limit headers: Remaining={remaining_requests}, Total={total_requests}")
-        data = json.loads(raw_text)
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
+            data = await response.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
     except Exception as e:
         logger.error(f"Grok API call failed: {e}")
         return None
@@ -383,7 +418,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             if price > 10:
                 logger.debug(f"Skipping row due to price > 10: {row}")
                 continue
-            row = apply_mappings(row, mappings)
+            row = apply_mappings(row, mappings, is_opis, email.get("from_addr", ""))
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
@@ -416,8 +451,6 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
             "output_file": None,
             "error": None,
             "debug_log": f"debug_{process_id}.txt",
-            "remaining_requests": "Unknown",
-            "total_requests": "Unknown",
         }
         process_statuses[process_id] = initial_status
         save_process_status(process_id, initial_status)

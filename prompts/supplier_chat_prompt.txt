@@ -6,7 +6,7 @@ You are a data extraction assistant tasked with parsing fuel pricing data from s
 3. Extract the effective date and time, which may be mentioned in the email (e.g., "Effective 04/26/25 00:01"). If not found, use "2025-04-26" and "00:01" as defaults.
 4. Format the output as a JSON array of objects, where each object represents a product entry with the following fields:
    - Supplier: The supplier name (e.g., "By-Lo Oil Company")
-   - Supply: Same as Supplier unless specified otherwise
+   - Supply: Leave blank (set to "") as this will be filled in later based on the terminal name
    - Product Name: The product name (e.g., "ULSD")
    - Terminal: The terminal name (e.g., "IL Wood River - KMEP")
    - Price: The price as a float (e.g., 2.1075)
@@ -28,7 +28,7 @@ IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
 [
   {
     "Supplier": "By-Lo Oil Company",
-    "Supply": "By-Lo Oil Company",
+    "Supply": "",
     "Product Name": "ULSD",
     "Terminal": "IL Wood River - KMEP",
     "Price": 2.1075,
@@ -38,7 +38,7 @@ IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
   },
   {
     "Supplier": "By-Lo Oil Company",
-    "Supply": "By-Lo Oil Company",
+    "Supply": "",
     "Product Name": "ULSD Dyed",
     "Terminal": "IL Wood River - KMEP",
     "Price": 2.1115,
@@ -48,7 +48,7 @@ IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
   },
   {
     "Supplier": "By-Lo Oil Company",
-    "Supply": "By-Lo Oil Company",
+    "Supply": "",
     "Product Name": "87E10",
     "Terminal": "IL, Cahokia, PSX",
     "Price": 9.0000,
@@ -58,7 +58,7 @@ IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
   },
   {
     "Supplier": "By-Lo Oil Company",
-    "Supply": "By-Lo Oil Company",
+    "Supply": "",
     "Product Name": "87E10",
     "Terminal": "IA, Bettendorf, MG, Marathon",
     "Price": 2.0655,
