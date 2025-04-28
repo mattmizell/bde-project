@@ -42,12 +42,19 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("parser")
 
 # Output and Prompts directory
-BASE_DIR: Path = Path(__file__).parent
+BASE_DIR: Path = BASE_DIR
 OUTPUT_DIR: Path = BASE_DIR / "output"
 PROMPTS_DIR: Path = BASE_DIR / "prompts"
 STATE_DIR: Path = BASE_DIR / "state"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Verify STATE_DIR permissions
+logger.info(f"STATE_DIR path: {STATE_DIR}")
+if not STATE_DIR.exists():
+    logger.error("STATE_DIR does not exist after mkdir")
+if not os.access(STATE_DIR, os.W_OK):
+    logger.error("STATE_DIR is not writable")
 
 # Global mappings
 SUPPLIER_MAPPING: Dict[str, str] = {}
@@ -63,9 +70,14 @@ REQUIRED_PRODUCTS = ["ULSD", "87E10"]
 
 def save_process_status(process_id: str, status: Dict) -> None:
     """Save the process status to a file."""
-    state_file = STATE_DIR / f"process_{process_id}.json"
-    with open(state_file, "w", encoding="utf-8") as f:
-        json.dump(status, f)
+    try:
+        state_file = STATE_DIR / f"process_{process_id}.json"
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(status, f)
+        logger.debug(f"Saved status for process {process_id} to {state_file}")
+    except Exception as e:
+        logger.error(f"Failed to save status for process {process_id}: {e}")
+        raise
 
 def load_process_status(process_id: str) -> Optional[Dict]:
     """Load the process status from a file."""
@@ -80,6 +92,8 @@ def delete_process_status(process_id: str) -> None:
     state_file = STATE_DIR / f"process_{process_id}.json"
     if state_file.exists():
         state_file.unlink()
+        logger.info(f"Deleted status file for process {process_id}")
+
 # --- Utilities ---
 
 def load_env() -> Dict[str, str]:
@@ -257,38 +271,67 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
     return valid_rows, skipped_rows, failed_email
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
-    env = load_env()
-    emails = fetch_emails(env, process_id)
-    process_statuses[process_id]["email_count"] = len(emails)
-    if not emails:
+    try:
+        env = load_env()
+        # Initialize and save status file immediately
+        initial_status = {
+            "status": "running",
+            "email_count": 0,
+            "current_email": 0,
+            "row_count": 0,
+            "output_file": None,
+            "error": None,
+        }
+        process_statuses[process_id] = initial_status
+        save_process_status(process_id, initial_status)
+        logger.info(f"Started process {process_id}, saved initial status")
+
+        emails = fetch_emails(env, process_id)
+        process_statuses[process_id]["email_count"] = len(emails)
+        save_process_status(process_id, process_statuses[process_id])
+        logger.info(f"Fetched {len(emails)} emails for process {process_id}")
+
+        if not emails:
+            process_statuses[process_id]["status"] = "done"
+            save_process_status(process_id, process_statuses[process_id])
+            logger.info(f"No emails to process for {process_id}")
+            return
+
+        output_file = f"parsed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        total_rows = 0
+        failed_emails = []
+
+        async with aiohttp.ClientSession() as session:
+            for idx, email in enumerate(emails):
+                process_statuses[process_id]["current_email"] = idx + 1
+                save_process_status(process_id, process_statuses[process_id])
+                logger.info(f"Processing email {idx + 1}/{len(emails)} for process {process_id}")
+                valid_rows, skipped_rows, failed_email = await process_email_with_delay(email, env, process_id, session)
+
+                if valid_rows:
+                    save_to_csv(valid_rows, output_file, process_id)
+                    total_rows += len(valid_rows)
+                    process_statuses[process_id]["row_count"] = total_rows
+                    save_process_status(process_id, process_statuses[process_id])
+
+                if failed_email:
+                    failed_email["content"] = email.get("content", "")
+                    failed_emails.append(failed_email)
+
+                await asyncio.sleep(2)
+
+        if failed_emails:
+            save_failed_emails_to_csv(failed_emails, output_file, process_id)
+
         process_statuses[process_id]["status"] = "done"
-        return
-
-    output_file = f"parsed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    total_rows = 0
-    failed_emails = []
-
-    async with aiohttp.ClientSession() as session:
-        for idx, email in enumerate(emails):
-            process_statuses[process_id]["current_email"] = idx + 1
-            valid_rows, skipped_rows, failed_email = await process_email_with_delay(email, env, process_id, session)
-
-            if valid_rows:
-                save_to_csv(valid_rows, output_file, process_id)
-                total_rows += len(valid_rows)
-                process_statuses[process_id]["row_count"] = total_rows
-
-            if failed_email:
-                failed_email["content"] = email.get("content", "")
-                failed_emails.append(failed_email)
-
-            await asyncio.sleep(2)
-
-    if failed_emails:
-        save_failed_emails_to_csv(failed_emails, output_file, process_id)
-
-    process_statuses[process_id]["status"] = "done"
-    process_statuses[process_id]["output_file"] = output_file
+        process_statuses[process_id]["output_file"] = output_file
+        save_process_status(process_id, process_statuses[process_id])
+        logger.info(f"Completed process {process_id} with {total_rows} rows")
+    except Exception as e:
+        logger.error(f"Error in process_all_emails for process {process_id}: {str(e)}")
+        process_statuses[process_id]["status"] = "error"
+        process_statuses[process_id]["error"] = str(e)
+        save_process_status(process_id, process_statuses[process_id])
 
 # --- CSV Saving Functions ---
 
