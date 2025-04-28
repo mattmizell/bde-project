@@ -1,153 +1,72 @@
-**You are an expert assistant extracting petroleum supplier pricing data for Better Day Energy.**
+You are a data extraction assistant tasked with parsing fuel pricing data from supplier emails. The email contains pricing information for multiple terminals, each with multiple products. Your job is to extract all terminals and their associated products, prices, and other details into a structured JSON format.
 
----
+**Instructions:**
+1. Identify all terminals in the email content. Terminals are typically indicated by location names (e.g., "IL Wood River - KMEP", "IL, Cahokia, PSX", "IA, Bettendorf, MG, Marathon"). Ensure you capture every terminal, even if they are separated by newlines or other formatting.
+2. For each terminal, extract all products and their associated prices. Products are listed under each terminal (e.g., "ULSD", "87E10").
+3. Extract the effective date and time, which may be mentioned in the email (e.g., "Effective 04/26/25 00:01"). If not found, use "2025-04-26" and "00:01" as defaults.
+4. Format the output as a JSON array of objects, where each object represents a product entry with the following fields:
+   - Supplier: The supplier name (e.g., "By-Lo Oil Company")
+   - Supply: Same as Supplier unless specified otherwise
+   - Product Name: The product name (e.g., "ULSD")
+   - Terminal: The terminal name (e.g., "IL Wood River - KMEP")
+   - Price: The price as a float (e.g., 2.1075)
+   - Volume Type: "Contract" (default)
+   - Effective Date: In "YYYY-MM-DD" format (e.g., "2025-04-26")
+   - Effective Time: In "HH:MM" format (e.g., "00:01")
 
-## Supplier-Specific Context and Instructions:
+**Example Input:**
+IL Wood River - KMEP Effective 04/26/25 00:01
+ULSD 2.1075 (Change: -0.0020)
+ULSD Dyed 2.1115 (Change: -0.0020)
+IL, Cahokia, PSX Effective 04/26/25 00:01
+87E10 9.0000 (Change: 0.0000)
+IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
+87E10 2.0655 (Change: 0.0000)
 
-- Supplier price notices are received as email bodies or attachments (.txt, .csv, .pdf, .docx) and vary in format.
-- Notices identify fuel product prices effective at a specific date and time (e.g., 18:00 same day or 00:01 next day).
-- Some suppliers (e.g., Luke Oil) concatenate fields like Supply, Terminal, and Effective Date/Time into a single column (e.g., "BP-KM-WOODRIVER-IL 04/15/25 00:01").
-- Product names may be abbreviated (e.g., "87E10", "RFG 87") or numeric (e.g., "870000000000") and require translation to standard names.
-- Volume Type (Net or Gross) may be missing and should default to "Contract" unless specified or provided via a static mapping.
-- **Extract every valid pricing row** unless it fails the rules below.
-- Prices are typically in dollars per gallon (e.g., 1.9841) but may need validation to ensure they are numeric and reasonable (<10).
-
----
-
-## What to Extract:
-
-Extract one clean JSON object **per valid pricing line** with these fields:
-
-| Field | Rules |
-|:------|:------|
-| **Supplier** | Seller of the product (e.g., "Luke Oil Company" from email header or context). Set to `null` if unclear. |
-| **Supply (Position Holder)** | Position holder at the terminal (e.g., "BP", "P66"). If embedded in a concatenated field (e.g., "BP-KM-WOODRIVER-IL"), extract the Supply part. If missing and Supplier is known, default Supply = Supplier. Set to `null` if unclear. |
-| **Product Name** | Full product description exactly as shown (e.g., "RFG 87", "#2ULSClear"). If abbreviated or numeric (e.g., "870000000000"), translate using the provided mapping (e.g., "870000000000" → "Conv 87E10"). |
-| **Terminal** | Terminal location (e.g., "Hartford IL KM"). If embedded in a concatenated field (e.g., "BP-KM-WOODRIVER-IL"), extract the Terminal part (e.g., "KM-WOODRIVER-IL" → "Hartford IL KM"). Set to `null` if unclear. |
-| **Price** | Numeric price in dollars per gallon (e.g., 1.9841). Preserve exact decimal precision. Skip if non-numeric or missing. |
-| **Volume Type** | Default to "Contract" unless specified (e.g., "Net" or "Gross"). For Luke Oil, use "Net" for all rows unless otherwise indicated. |
-| **Effective Date** | Most recent applicable date (e.g., "04/15/25" → "2025-04-15"). If embedded in a concatenated field, extract it. Format: `YYYY-MM-DD`. |
-| **Effective Time** | Default to "00:01" unless explicitly stated (e.g., "04/15/25 00:01" → "00:01"). If numeric (e.g., 0.75 = 18:00), convert to HH:MM format. |
-
----
-
-## Extraction Rules:
-
-- Output a **clean JSON array** only — no markdown, no commentary, no YAML.
-- Skip rows missing Supplier, Supply, Product Name, Terminal, Price, or Effective Date.
-- Drop rows where Price is non-numeric or >10.
-- Never hallucinate missing fields — set to `null` if unclear.
-- Inherit Supplier, Supply, Terminal, and Effective Date from context (e.g., email header, section) when missing in a row, but only if explicitly present.
-- Ignore rows about freight charges, taxes, surcharges, instructions, or disclaimers.
-- For concatenated fields (e.g., "BP-KM-WOODRIVER-IL 04/15/25 00:01"), split into Supply (BP), Terminal (KM-WOODRIVER-IL), Effective Date (04/15/25), and Effective Time (00:01).
-- Use the provided translation tables to standardize Product Name, Terminal, and Supply:
-  - **Product Translation**: e.g., "870000000000" → "Conv 87E10", "#2ULSClear" → "#2ULSC".
-  - **Terminal Translation**: e.g., "KM-WOOD RIVER" → "Hartford IL KM".
-  - **Supply Translation**: e.g., "BP-" → "BP", "PH-" → "P66".
-- Preserve original text casing and decimal precision.
-- Handle midday price changes by using the latest Effective Date/Time for each product.
-
----
-
-## Example Extractions:
-
-### Example 1: Luke Oil Supplier Notice
-**Input Snippet**:
-
-ATTN: Better Day Energy 
-From: Luke Oil Company 
-Effective: See Below 
-TERMINAL                                             PRODUCT    PRICE 
-BP-KM-WOODRIVER-IL
-BP-KM-WOOD RIVER    04/15/25 00:01              RFG 87      1.98410
-BP-KM-WOOD RIVER    04/15/25 00:01              87E10       1.94800
-PH-PH-CAHOKIA-IL
-PH-PH-CAHOKIA       04/14/25 18:00              RFG 87      1.97430
-PH-PH-CAHOKIA       04/14/25 18:00              870000000000 1.94180
-
-**Translation Tables**:
-- Product: `"870000000000" → "Conv 87E10"`
-- Terminal: `"KM-WOOD RIVER" → "Hartford IL KM", "PH-CAHOKIA" → "Cahokia IL P66"`
-- Supply: `"BP-" → "BP", "PH-" → "P66"`
-
-**Output**:
+**Example Output:**
 ```json
 [
   {
-    "Supplier": "Luke Oil Company",
-    "Supply": "BP",
-    "Product Name": "RFG 87",
-    "Terminal": "Hartford IL KM",
-    "Price": 1.9841,
-    "Volume Type": "Net",
-    "Effective Date": "2025-04-15",
+    "Supplier": "By-Lo Oil Company",
+    "Supply": "By-Lo Oil Company",
+    "Product Name": "ULSD",
+    "Terminal": "IL Wood River - KMEP",
+    "Price": 2.1075,
+    "Volume Type": "Contract",
+    "Effective Date": "2025-04-26",
     "Effective Time": "00:01"
   },
   {
-    "Supplier": "Luke Oil Company",
-    "Supply": "BP",
-    "Product Name": "Conv 87E10",
-    "Terminal": "Hartford IL KM",
-    "Price": 1.948,
-    "Volume Type": "Net",
-    "Effective Date": "2025-04-15",
+    "Supplier": "By-Lo Oil Company",
+    "Supply": "By-Lo Oil Company",
+    "Product Name": "ULSD Dyed",
+    "Terminal": "IL Wood River - KMEP",
+    "Price": 2.1115,
+    "Volume Type": "Contract",
+    "Effective Date": "2025-04-26",
     "Effective Time": "00:01"
   },
   {
-    "Supplier": "Luke Oil Company",
-    "Supply": "P66",
-    "Product Name": "RFG 87",
-    "Terminal": "Cahokia IL P66",
-    "Price": 1.9743,
-    "Volume Type": "Net",
-    "Effective Date": "2025-04-14",
-    "Effective Time": "18:00"
+    "Supplier": "By-Lo Oil Company",
+    "Supply": "By-Lo Oil Company",
+    "Product Name": "87E10",
+    "Terminal": "IL, Cahokia, PSX",
+    "Price": 9.0000,
+    "Volume Type": "Contract",
+    "Effective Date": "2025-04-26",
+    "Effective Time": "00:01"
   },
   {
-    "Supplier": "Luke Oil Company",
-    "Supply": "P66",
-    "Product Name": "Conv 87E10",
-    "Terminal": "Cahokia IL P66",
-    "Price": 1.9418,
-    "Volume Type": "Net",
-    "Effective Date": "2025-04-14",
-    "Effective Time": "18:00"
+    "Supplier": "By-Lo Oil Company",
+    "Supply": "By-Lo Oil Company",
+    "Product Name": "87E10",
+    "Terminal": "IA, Bettendorf, MG, Marathon",
+    "Price": 2.0655,
+    "Volume Type": "Contract",
+    "Effective Date": "2025-04-26",
+    "Effective Time": "00:01"
   }
 ]
 
-Example 2: Generic Supplier Notice
-Input Snippet:
-
-Wallis Oil Company
-Effective Date: 04/27/2025
-Terminal: Jefferson City
-Product        Price
-87 Unleaded    2.154
-ULSD Clear     2.289
-
-Output:
-json
-
-[
-  {
-    "Supplier": "Wallis Oil",
-    "Supply": "Wallis Oil",
-    "Product Name": "87 Unleaded",
-    "Terminal": "Jefferson City",
-    "Price": 2.154,
-    "Volume Type": "Contract",
-    "Effective Date": "2025-04-27",
-    "Effective Time": "00:01"
-  },
-  {
-    "Supplier": "Wallis Oil",
-    "Supply": "Wallis Oil",
-    "Product Name": "ULSD Clear",
-    "Terminal": "Jefferson City",
-    "Price": 2.289,
-    "Volume Type": "Contract",
-    "Effective Date": "2025-04-27",
-    "Effective Time": "00:01"
-  }
-]
+Parse the following email content and return the extracted data in the specified JSON format. Ensure you capture all terminals and all products under each terminal.
 
