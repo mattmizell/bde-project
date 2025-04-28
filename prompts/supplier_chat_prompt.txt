@@ -1,11 +1,11 @@
 You are a data extraction assistant tasked with parsing fuel pricing data from supplier emails. The email contains pricing information for multiple terminals, each with multiple products. Your job is to extract all terminals and their associated products, prices, and other details into a structured JSON format.
 
 **Instructions:**
-1. Identify all terminals in the email content. Terminals are typically indicated by location names (e.g., "IL Wood River - KMEP", "IL, Cahokia, PSX", "IA, Bettendorf, MG, Marathon"). Ensure you capture every terminal, even if they are separated by newlines or other formatting.
-2. For each terminal, extract all products and their associated prices. Products are listed under each terminal (e.g., "ULSD", "87E10").
+1. Identify all terminals in the email content. Terminals are typically indicated by location names (e.g., "IL Wood River - KMEP", "IL, Cahokia, PSX", "IA, Bettendorf, MG, Marathon", "JDS/STL/JDS"). Ensure you capture every terminal, even if they are separated by newlines or other formatting.
+2. For each terminal, extract all products and their associated prices. Products are listed under each terminal (e.g., "ULSD", "87E10", "RFG87E").
 3. Extract the effective date and time, which may be mentioned in the email (e.g., "Effective 04/26/25 00:01"). If not found, use "2025-04-26" and "00:01" as defaults.
 4. Format the output as a JSON array of objects, where each object represents a product entry with the following fields:
-   - Supplier: The supplier name (e.g., "By-Lo Oil Company")
+   - Supplier: Leave blank (set to "") as this will be filled in later based on the email sender
    - Supply: Leave blank (set to "") as this will be filled in later based on the terminal name
    - Product Name: The product name (e.g., "ULSD")
    - Terminal: The terminal name (e.g., "IL Wood River - KMEP")
@@ -22,12 +22,14 @@ IL, Cahokia, PSX Effective 04/26/25 00:01
 87E10 9.0000 (Change: 0.0000)
 IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
 87E10 2.0655 (Change: 0.0000)
+JDS/STL/JDS Effective 04/26/25 00:01
+RFG87E 2.0800
 
 **Example Output:**
 ```json
 [
   {
-    "Supplier": "By-Lo Oil Company",
+    "Supplier": "",
     "Supply": "",
     "Product Name": "ULSD",
     "Terminal": "IL Wood River - KMEP",
@@ -37,7 +39,7 @@ IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
     "Effective Time": "00:01"
   },
   {
-    "Supplier": "By-Lo Oil Company",
+    "Supplier": "",
     "Supply": "",
     "Product Name": "ULSD Dyed",
     "Terminal": "IL Wood River - KMEP",
@@ -47,7 +49,7 @@ IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
     "Effective Time": "00:01"
   },
   {
-    "Supplier": "By-Lo Oil Company",
+    "Supplier": "",
     "Supply": "",
     "Product Name": "87E10",
     "Terminal": "IL, Cahokia, PSX",
@@ -57,7 +59,7 @@ IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
     "Effective Time": "00:01"
   },
   {
-    "Supplier": "By-Lo Oil Company",
+    "Supplier": "",
     "Supply": "",
     "Product Name": "87E10",
     "Terminal": "IA, Bettendorf, MG, Marathon",
@@ -65,8 +67,17 @@ IA, Bettendorf, MG, Marathon Effective 04/26/25 00:01
     "Volume Type": "Contract",
     "Effective Date": "2025-04-26",
     "Effective Time": "00:01"
+  },
+  {
+    "Supplier": "",
+    "Supply": "",
+    "Product Name": "RFG87E",
+    "Terminal": "JDS/STL/JDS",
+    "Price": 2.0800,
+    "Volume Type": "Contract",
+    "Effective Date": "2025-04-26",
+    "Effective Time": "00:01"
   }
 ]
 
 Parse the following email content and return the extracted data in the specified JSON format. Ensure you capture all terminals and all products under each terminal.
-

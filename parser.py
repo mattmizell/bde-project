@@ -389,13 +389,31 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
         content_lower = content.lower()
         subject_lower = email.get("subject", "").lower()
-        is_opis = ("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
-                  ("opis" in subject_lower and ("rack" in subject_lower or "wholesale" in subject_lower))
+        # Improved OPIS detection: require both "opis" and ("rack" or "wholesale") in either content or subject
+        is_opis = (("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
+                   ("opis" in subject_lower and ("rack" in subject_lower or "wholesale" in subject_lower))) and \
+                   not ("From:" in content and "wallis" in content_lower)  # Exclude Wallis forwarded emails
         logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
         logger.debug(f"Email subject: {email.get('subject', '')}")
         logger.debug(f"Email content (first 500 chars): {content[:500]}")
-        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
+        prompt_file = "prompts/opis_chat_prompt.txt" if is_opis else "prompts/supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
+
+        # Check for forwarded email and extract original sender
+        email_from = email.get("from_addr", "")
+        if "From:" in content:
+            forwarded_from_match = re.search(r"From:\s*(.*?)\s*(?:<[^>]+>|Sent:|$)", content, re.IGNORECASE)
+            if forwarded_from_match:
+                email_from = forwarded_from_match.group(1).strip()
+                logger.debug(f"Extracted original sender for forwarded email UID {email.get('uid', '?')}: {email_from}")
+            else:
+                supplier_match = re.search(r'^(.*?)(?:\s*<|$)', email_from)
+                email_from = supplier_match.group(1).strip() if supplier_match else email_from
+                logger.debug(f"No forwarded sender found, using email_from: {email_from}")
+        else:
+            supplier_match = re.search(r'^(.*?)(?:\s*<|$)', email_from)
+            email_from = supplier_match.group(1).strip() if supplier_match else email_from
+            logger.debug(f"Using email_from for non-forwarded email UID {email.get('uid', '?')}: {email_from}")
 
         parsed = await call_grok_api(prompt_chat, content, env, session, process_id)
         logger.debug(f"Grok raw response for UID {email.get('uid', '?')}: {parsed}")
@@ -418,13 +436,13 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             if price > 10:
                 logger.debug(f"Skipping row due to price > 10: {row}")
                 continue
-            row = apply_mappings(row, mappings, is_opis, email.get("from_addr", ""))
+            row = apply_mappings(row, mappings, is_opis, email_from=email_from)
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
                 "Product Name": row.get("Product Name", ""),
                 "Terminal": row.get("Terminal", ""),
-                "Price": price,
+                "Price": row.get("Price", 0),
                 "Volume Type": row.get("Volume Type", ""),
                 "Effective Date": row.get("Effective Date", ""),
                 "Effective Time": row.get("Effective Time", ""),
