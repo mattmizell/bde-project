@@ -47,11 +47,12 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
-# Output and Prompts directory
+# Output, Prompts, and State directories
 OUTPUT_DIR: Path = BASE_DIR / "output"
 PROMPTS_DIR: Path = BASE_DIR / "prompts"
 STATE_DIR: Path = BASE_DIR / "state"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Verify STATE_DIR permissions
@@ -60,15 +61,6 @@ if not STATE_DIR.exists():
     logger.error("STATE_DIR does not exist after mkdir")
 if not os.access(STATE_DIR, os.W_OK):
     logger.error("STATE_DIR is not writable")
-
-# Global mappings
-SUPPLIER_MAPPING: Dict[str, str] = {}
-PRODUCT_MAPPING: Dict[str, str] = {}
-TERMINAL_MAPPING: List[Dict[str, str]] = []
-
-EXPECTED_PRICE_RANGE = {"E10": (1.50, 4.00), "ULSD": (1.80, 3.50)}
-PRICE_TOLERANCE = 0.01
-REQUIRED_PRODUCTS = ["ULSD", "87E10"]
 
 # --- File Logging Setup ---
 def setup_file_logging(process_id: str) -> logging.Handler:
@@ -128,6 +120,104 @@ def delete_process_status(process_id: str) -> None:
     except Exception as e:
         logger.error(f"Failed to delete status file for process {process_id}: {e}")
 
+# --- Load Translation Mappings ---
+def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
+    """
+    Load translation mappings from mappings.xlsx using sheet names to determine category.
+    Expects sheets: SupplierMappings, ProductMappings, TerminalMappings.
+    Returns a dictionary with mappings for Suppliers, Products, and Terminals.
+    """
+    try:
+        # Load the Excel file
+        xl = pd.ExcelFile(file_path)
+        mappings = {"suppliers": {}, "products": {}, "terminals": {}}
+
+        # Load SupplierMappings sheet
+        if "SupplierMappings" in xl.sheet_names:
+            df_suppliers = xl.parse("SupplierMappings")
+            for _, row in df_suppliers.iterrows():
+                raw_value = str(row["Raw Value"]).strip()
+                standardized_value = str(row["Standardized Value"]).strip()
+                mappings["suppliers"][raw_value] = standardized_value
+            logger.debug(f"Loaded {len(mappings['suppliers'])} supplier mappings")
+
+        # Load ProductMappings sheet
+        if "ProductMappings" in xl.sheet_names:
+            df_products = xl.parse("ProductMappings")
+            for _, row in df_products.iterrows():
+                raw_value = str(row["Raw Value"]).strip()
+                standardized_value = str(row["Standardized Value"]).strip()
+                mappings["products"][raw_value] = standardized_value
+            logger.debug(f"Loaded {len(mappings['products'])} product mappings")
+
+        # Load TerminalMappings sheet
+        if "TerminalMappings" in xl.sheet_names:
+            df_terminals = xl.parse("TerminalMappings")
+            for _, row in df_terminals.iterrows():
+                raw_value = str(row["Raw Value"]).strip()
+                standardized_value = str(row["Standardized Value"]).strip()
+                condition = row.get("Condition", None)
+                if raw_value not in mappings["terminals"]:
+                    mappings["terminals"][raw_value] = []
+                mappings["terminals"][raw_value].append({
+                    "standardized": standardized_value,
+                    "condition": condition if pd.notna(condition) else None
+                })
+            logger.debug(f"Loaded {len(mappings['terminals'])} terminal mappings")
+
+        logger.debug(f"Total mappings loaded: Suppliers={len(mappings['suppliers'])}, Products={len(mappings['products'])}, Terminals={len(mappings['terminals'])}")
+        return mappings
+    except Exception as e:
+        logger.error(f"Failed to load mappings from {file_path}: {e}")
+        return {"suppliers": {}, "products": {}, "terminals": {}}
+
+# --- Apply Mappings to Rows ---
+def apply_mappings(row: Dict, mappings: Dict[str, Dict]) -> Dict:
+    """
+    Apply translation mappings to a row's Supplier, Supply, Product Name, and Terminal.
+    """
+    # Apply Supplier mapping
+    supplier = row.get("Supplier", "")
+    if supplier in mappings["suppliers"]:
+        row["Supplier"] = mappings["suppliers"][supplier]
+        row["Supply"] = mappings["suppliers"][supplier]  # Supply matches Supplier
+        logger.debug(f"Translated Supplier: {supplier} -> {row['Supplier']}")
+
+    # Apply Product mapping
+    product = row.get("Product Name", "")
+    # For OPIS products, strip "Gross " prefix if present
+    product_key = product.replace("Gross ", "") if product.startswith("Gross ") else product
+    if product_key in mappings["products"]:
+        row["Product Name"] = mappings["products"][product_key]
+        logger.debug(f"Translated Product: {product} -> {row['Product Name']}")
+    else:
+        # Try matching without prefixes like "Wholesale "
+        product_key = product_key.replace("Wholesale ", "")
+        if product_key in mappings["products"]:
+            row["Product Name"] = mappings["products"][product_key]
+            logger.debug(f"Translated Product: {product} -> {row['Product Name']}")
+
+    # Apply Terminal mapping
+    terminal = row.get("Terminal", "")
+    supplier = row.get("Supplier", "")  # Use updated Supplier
+    if terminal in mappings["terminals"]:
+        for mapping in mappings["terminals"][terminal]:
+            condition = mapping["condition"]
+            if condition is None:
+                row["Terminal"] = mapping["standardized"]
+                logger.debug(f"Translated Terminal: {terminal} -> {row['Terminal']}")
+                break
+            elif condition == 'Supplier in ["Phillips 66", "Cenex"]' and supplier in ["Phillips 66", "Cenex"]:
+                row["Terminal"] = mapping["standardized"]
+                logger.debug(f"Translated Terminal: {terminal} -> {row['Terminal']} (condition: Supplier in ['Phillips 66', 'Cenex'])")
+                break
+            elif condition == 'Supplier not in ["Phillips 66", "Cenex"]' and supplier not in ["Phillips 66", "Cenex"]:
+                row["Terminal"] = mapping["standardized"]
+                logger.debug(f"Translated Terminal: {terminal} -> {row['Terminal']} (condition: Supplier not in ['Phillips 66', 'Cenex'])")
+                break
+
+    return row
+
 # --- Utilities ---
 def load_env() -> Dict[str, str]:
     load_dotenv()
@@ -142,27 +232,6 @@ def load_env() -> Dict[str, str]:
         if not value:
             raise ValueError(f"Missing environment variable: {key}")
     return env_vars
-
-def initialize_mappings() -> None:
-    global SUPPLIER_MAPPING, PRODUCT_MAPPING, TERMINAL_MAPPING
-    mappings_file = BASE_DIR / "mappings.xlsx"
-    if not mappings_file.exists():
-        raise FileNotFoundError(f"Mappings file not found: {mappings_file}")
-
-    df_suppliers = pd.read_excel(mappings_file, sheet_name="SupplierMappings")
-    SUPPLIER_MAPPING = dict(zip(df_suppliers["Raw Value"], df_suppliers["Standardized Value"]))
-
-    df_products = pd.read_excel(mappings_file, sheet_name="ProductMappings")
-    PRODUCT_MAPPING = dict(zip(df_products["Raw Value"], df_products["Standardized Value"]))
-
-    df_terminals = pd.read_excel(mappings_file, sheet_name="TerminalMappings")
-    TERMINAL_MAPPING = []
-    for _, row in df_terminals.iterrows():
-        TERMINAL_MAPPING.append({
-            "raw_value": str(row["Raw Value"]),
-            "standardized_value": str(row["Standardized Value"]),
-            "condition": str(row.get("Condition", "")) if pd.notna(row.get("Condition")) else None
-        })
 
 # --- Email Handling ---
 def choose_best_content_from_email(msg) -> str:
@@ -265,7 +334,9 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         if not content:
             raise ValueError("Empty email content")
 
-        # Updated OPIS classification logic
+        # Load mappings
+        mappings = load_mappings("mappings.xlsx")
+
         content_lower = content.lower()
         subject_lower = email.get("subject", "").lower()
         is_opis = ("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
@@ -299,6 +370,8 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             if price > 10:  # Check price after conversion
                 logger.debug(f"Skipping row due to price > 10: {row}")
                 continue
+            # Apply mappings to the row
+            row = apply_mappings(row, mappings)
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
