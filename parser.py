@@ -398,7 +398,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
         logger.debug(f"Email subject: {email.get('subject', '')}")
         logger.debug(f"Email content (first 500 chars): {content[:500]}")
-        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"  # Remove the "prompts/" prefix
+        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"  # Fixed path (no extra "prompts/")
         prompt_path = PROMPT_DIR / prompt_file
         logger.debug(f"Attempting to load prompt file from: {prompt_path}")  # Log the resolved path
         prompt_chat = load_prompt(prompt_file)
