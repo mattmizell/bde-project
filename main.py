@@ -1,66 +1,43 @@
-# main.py
-import asyncio
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
-from parser import process_all_emails, initialize_mappings, load_process_status, delete_process_status
+from fastapi.responses import FileResponse
+from parser import (
+    process_all_emails,
+    initialize_mappings,
+    load_process_status,
+    delete_process_status,  # Ensure this is imported
+    load_env
+)
 from uuid import uuid4
 from pathlib import Path
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+# Load environment variables
+load_env()  # Ensure environment variables are loaded
 
 app = FastAPI()
 
 # Initialize mappings at startup
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Starting up application and initializing mappings")
     initialize_mappings()
 
-# Simple endpoint to test CORS without background tasks
-@app.get("/cors-test")
-async def cors_test():
-    logger.debug("Received GET request to /cors-test")
-    return {"message": "CORS test successful"}
-
-@app.options("/start-process")
-async def handle_options_start_process():
-    logger.debug("Handling OPTIONS request for /start-process")
-    return {"status": "ok"}
-
-@app.post("/start-process", status_code=200)
+@app.post("/start-process")
 async def start_process(background_tasks: BackgroundTasks):
     """
     Start processing emails asynchronously and immediately return process_id.
     """
-    logger.debug("Received POST request to /start-process")
-    try:
-        process_id = str(uuid4())
-        logger.debug(f"Generated process_id: {process_id}")
-
-        # Launch background task to process emails
-        background_tasks.add_task(process_all_emails, process_id)
-        logger.info("Background task started for email processing.")
-
-        response = {"process_id": process_id}
-        logger.debug(f"Returning response: {response}")
-        return JSONResponse(content=response, status_code=200)
-
-    except Exception as e:
-        logger.exception(f"Failed in start_process: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Start process error: {str(e)}")
+    process_id = str(uuid4())
+    background_tasks.add_task(process_all_emails, process_id)
+    logging.info("Your service is live 🎉")
+    return {"process_id": process_id}
 
 @app.get("/status/{process_id}")
 async def get_status(process_id: str):
     """
     Get current status of a background parsing task.
     """
-    logger.debug(f"Received GET request to /status/{process_id}")
     status = load_process_status(process_id)
     if not status:
-        logger.warning(f"Process {process_id} not found")
         raise HTTPException(status_code=404, detail="Process not found")
     return status
 
@@ -69,19 +46,16 @@ async def download_file(filename: str):
     """
     Download output CSV or failed CSV by filename.
     """
-    logger.debug(f"Received GET request to /download/{filename}")
     file_path = Path("output") / filename
     if not file_path.exists():
-        logger.warning(f"File {filename} not found")
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename)
 
 @app.get("/keep-alive")
 async def keep_alive():
     """
-    Simple keep-alive endpoint for frontend pinging.
+    Endpoint to keep the server alive during long-running tasks.
     """
-    logger.debug("Received GET request to /keep-alive")
     return {"status": "alive"}
 
 if __name__ == "__main__":
