@@ -124,7 +124,7 @@ def delete_process_status(process_id: str) -> None:
 def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
     """
     Load translation mappings from mappings.xlsx using sheet names to determine category.
-    Expects sheets: SupplierMappings, ProductMappings, TerminalMappings.
+    Logs available sheet names for debugging.
     Returns a dictionary with mappings for Suppliers, Products, and Terminals.
     """
     try:
@@ -132,27 +132,49 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
         xl = pd.ExcelFile(file_path)
         mappings = {"suppliers": {}, "products": {}, "terminals": {}}
 
-        # Load SupplierMappings sheet
-        if "SupplierMappings" in xl.sheet_names:
-            df_suppliers = xl.parse("SupplierMappings")
+        # Log available sheet names for debugging
+        logger.debug(f"Available sheets in {file_path}: {xl.sheet_names}")
+
+        # Load SupplierMappings sheet (try common variations)
+        supplier_sheet = None
+        for sheet_name in ["SupplierMappings", "Suppliers", "Supplier Mappings"]:
+            if sheet_name in xl.sheet_names:
+                supplier_sheet = sheet_name
+                break
+        if supplier_sheet:
+            df_suppliers = xl.parse(supplier_sheet)
             for _, row in df_suppliers.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
                 mappings["suppliers"][raw_value] = standardized_value
-            logger.debug(f"Loaded {len(mappings['suppliers'])} supplier mappings")
+            logger.debug(f"Loaded {len(mappings['suppliers'])} supplier mappings from sheet '{supplier_sheet}'")
+        else:
+            logger.warning("Supplier mappings sheet not found. Expected 'SupplierMappings', 'Suppliers', or 'Supplier Mappings'.")
 
-        # Load ProductMappings sheet
-        if "ProductMappings" in xl.sheet_names:
-            df_products = xl.parse("ProductMappings")
+        # Load ProductMappings sheet (try common variations)
+        product_sheet = None
+        for sheet_name in ["ProductMappings", "Products", "Product Mappings"]:
+            if sheet_name in xl.sheet_names:
+                product_sheet = sheet_name
+                break
+        if product_sheet:
+            df_products = xl.parse(product_sheet)
             for _, row in df_products.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
                 mappings["products"][raw_value] = standardized_value
-            logger.debug(f"Loaded {len(mappings['products'])} product mappings")
+            logger.debug(f"Loaded {len(mappings['products'])} product mappings from sheet '{product_sheet}'")
+        else:
+            logger.warning("Product mappings sheet not found. Expected 'ProductMappings', 'Products', or 'Product Mappings'.")
 
-        # Load TerminalMappings sheet
-        if "TerminalMappings" in xl.sheet_names:
-            df_terminals = xl.parse("TerminalMappings")
+        # Load TerminalMappings sheet (try common variations)
+        terminal_sheet = None
+        for sheet_name in ["TerminalMappings", "Terminals", "Terminal Mappings"]:
+            if sheet_name in xl.sheet_names:
+                terminal_sheet = sheet_name
+                break
+        if terminal_sheet:
+            df_terminals = xl.parse(terminal_sheet)
             for _, row in df_terminals.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
@@ -163,7 +185,9 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
                     "standardized": standardized_value,
                     "condition": condition if pd.notna(condition) else None
                 })
-            logger.debug(f"Loaded {len(mappings['terminals'])} terminal mappings")
+            logger.debug(f"Loaded {len(mappings['terminals'])} terminal mappings from sheet '{terminal_sheet}'")
+        else:
+            logger.warning("Terminal mappings sheet not found. Expected 'TerminalMappings', 'Terminals', or 'Terminal Mappings'.")
 
         logger.debug(f"Total mappings loaded: Suppliers={len(mappings['suppliers'])}, Products={len(mappings['products'])}, Terminals={len(mappings['terminals'])}")
         return mappings
