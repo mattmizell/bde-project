@@ -1,3 +1,4 @@
+import os  # Added missing import
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,7 +8,7 @@ from parser import (
     load_process_status,
     delete_process_status,
     load_env,
-    process_status  # Import process_status
+    process_status
 )
 from uuid import uuid4
 from pathlib import Path
