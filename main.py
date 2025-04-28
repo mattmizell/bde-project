@@ -1,4 +1,4 @@
-import os  # Added missing import
+import os
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,15 +15,16 @@ from pathlib import Path
 import logging
 
 # Load environment variables
-load_env()  # Ensure environment variables are loaded
+load_env()
 
 # Initialize FastAPI app
 app = FastAPI()
 
 # Configure logging
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
+log_level = os.getenv("LOG_LEVEL", "DEBUG").upper()  # Default to DEBUG if not set
+logging.basicConfig(level=getattr(logging, log_level, logging.DEBUG))
 logger = logging.getLogger(__name__)
+logger.debug(f"Logging level set to {log_level}")  # Confirm the logging level
 
 # CORS configuration to allow requests from your frontend domain
 app.add_middleware(
