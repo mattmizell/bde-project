@@ -2,7 +2,6 @@
 import asyncio
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
 from parser import process_all_emails, initialize_mappings, load_process_status, delete_process_status
 from uuid import uuid4
 from pathlib import Path
@@ -13,18 +12,6 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-
-# Add CORS middleware with logging
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Temporarily allow all origins for debugging
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Log middleware setup
-logger.debug("CORS Middleware configured with allow_origins=['*'], allow_methods=['*'], allow_headers=['*']")
 
 # Initialize mappings at startup
 @app.on_event("startup")
@@ -47,11 +34,14 @@ async def handle_options_start_process():
 async def start_process(background_tasks: BackgroundTasks):
     logger.debug("Received POST request to /start-process")
     process_id = str(uuid4())
+    logger.debug(f"Generated process_id: {process_id}")
     background_tasks.add_task(process_all_emails, process_id)
     logger.info("Your service is live 🎉")
     # Add a 10-second delay to prevent immediate shutdown
     await asyncio.sleep(10)
-    return {"process_id": process_id}
+    response = {"process_id": process_id}
+    logger.debug(f"Returning response: {response}")
+    return response
 
 @app.get("/status/{process_id}")
 async def get_status(process_id: str):
