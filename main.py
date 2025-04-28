@@ -1,7 +1,7 @@
 # main.py
 import asyncio
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from parser import process_all_emails, initialize_mappings, load_process_status, delete_process_status
 from uuid import uuid4
 from pathlib import Path
@@ -30,23 +30,27 @@ async def handle_options_start_process():
     logger.debug("Handling OPTIONS request for /start-process")
     return {"status": "ok"}
 
-@app.post("/start-process")
+@app.post("/start-process", status_code=200)
 async def start_process(background_tasks: BackgroundTasks):
     """
     Start processing emails asynchronously and immediately return process_id.
     """
     logger.debug("Received POST request to /start-process")
-    process_id = str(uuid4())
-    logger.debug(f"Generated process_id: {process_id}")
+    try:
+        process_id = str(uuid4())
+        logger.debug(f"Generated process_id: {process_id}")
 
-    # Launch background task to process emails
-    background_tasks.add_task(process_all_emails, process_id)
-    logger.info("Background task started for email processing.")
+        # Launch background task to process emails
+        background_tasks.add_task(process_all_emails, process_id)
+        logger.info("Background task started for email processing.")
 
-    # Immediately return the process ID (no sleep)
-    response = {"process_id": process_id}
-    logger.debug(f"Returning response: {response}")
-    return response
+        response = {"process_id": process_id}
+        logger.debug(f"Returning response: {response}")
+        return JSONResponse(content=response, status_code=200)
+
+    except Exception as e:
+        logger.exception(f"Failed in start_process: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Start process error: {str(e)}")
 
 @app.get("/status/{process_id}")
 async def get_status(process_id: str):
