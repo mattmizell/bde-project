@@ -35,7 +35,7 @@ process_status = {}
 
 # Configure logger
 logger = logging.getLogger("parser")
-logger.setLevel(logging.DEBUG)  # Ensure the logger itself is set to DEBUG
+logger.setLevel(logging.DEBUG)
 
 # Remove any existing handlers to avoid conflicts
 logger.handlers = []
@@ -48,11 +48,9 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 # Output, Prompts, and State directories
-OUTPUT_DIR: Path = BASE_DIR / "output"
-PROMPTS_DIR: Path = BASE_DIR / "prompts"
-STATE_DIR: Path = BASE_DIR / "state"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+STATE_DIR: Path = BASE_DIR / "state"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Verify STATE_DIR permissions
@@ -64,10 +62,9 @@ if not os.access(STATE_DIR, os.W_OK):
 
 # --- File Logging Setup ---
 def setup_file_logging(process_id: str) -> logging.Handler:
-    """Set up a file handler for detailed logging."""
     log_file = OUTPUT_DIR / f"debug_{process_id}.txt"
     file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.DEBUG)  # Ensure file handler captures DEBUG messages
+    file_handler.setLevel(logging.DEBUG)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -76,7 +73,6 @@ def setup_file_logging(process_id: str) -> logging.Handler:
     return file_handler
 
 def remove_file_logging(handler: logging.Handler) -> None:
-    """Remove the file handler after processing."""
     logger.removeHandler(handler)
     handler.close()
     logger.debug("File logging handler removed")
@@ -85,7 +81,6 @@ def remove_file_logging(handler: logging.Handler) -> None:
 def save_process_status(process_id: str, status: Dict) -> None:
     try:
         state_file = STATE_DIR / f"process_{process_id}.json"
-        # Ensure the directory exists
         state_file.parent.mkdir(parents=True, exist_ok=True)
         with open(state_file, "w", encoding="utf-8") as f:
             json.dump(status, f)
@@ -122,20 +117,12 @@ def delete_process_status(process_id: str) -> None:
 
 # --- Load Translation Mappings ---
 def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
-    """
-    Load translation mappings from mappings.xlsx using sheet names to determine category.
-    Logs available sheet names for debugging.
-    Returns a dictionary with mappings for Suppliers, Products, and Terminals.
-    """
     try:
-        # Load the Excel file
         xl = pd.ExcelFile(file_path)
         mappings = {"suppliers": {}, "products": {}, "terminals": {}}
 
-        # Log available sheet names for debugging
         logger.debug(f"Available sheets in {file_path}: {xl.sheet_names}")
 
-        # Load SupplierMappings sheet (try common variations)
         supplier_sheet = None
         for sheet_name in ["SupplierMappings", "Suppliers", "Supplier Mappings"]:
             if sheet_name in xl.sheet_names:
@@ -151,7 +138,6 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
         else:
             logger.warning("Supplier mappings sheet not found. Expected 'SupplierMappings', 'Suppliers', or 'Supplier Mappings'.")
 
-        # Load ProductMappings sheet (try common variations)
         product_sheet = None
         for sheet_name in ["ProductMappings", "Products", "Product Mappings"]:
             if sheet_name in xl.sheet_names:
@@ -167,7 +153,6 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
         else:
             logger.warning("Product mappings sheet not found. Expected 'ProductMappings', 'Products', or 'Product Mappings'.")
 
-        # Load TerminalMappings sheet (try common variations)
         terminal_sheet = None
         for sheet_name in ["TerminalMappings", "Terminals", "Terminal Mappings"]:
             if sheet_name in xl.sheet_names:
@@ -197,33 +182,25 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
 
 # --- Apply Mappings to Rows ---
 def apply_mappings(row: Dict, mappings: Dict[str, Dict]) -> Dict:
-    """
-    Apply translation mappings to a row's Supplier, Supply, Product Name, and Terminal.
-    """
-    # Apply Supplier mapping
     supplier = row.get("Supplier", "")
     if supplier in mappings["suppliers"]:
         row["Supplier"] = mappings["suppliers"][supplier]
-        row["Supply"] = mappings["suppliers"][supplier]  # Supply matches Supplier
+        row["Supply"] = mappings["suppliers"][supplier]
         logger.debug(f"Translated Supplier: {supplier} -> {row['Supplier']}")
 
-    # Apply Product mapping
     product = row.get("Product Name", "")
-    # For OPIS products, strip "Gross " prefix if present
     product_key = product.replace("Gross ", "") if product.startswith("Gross ") else product
     if product_key in mappings["products"]:
         row["Product Name"] = mappings["products"][product_key]
         logger.debug(f"Translated Product: {product} -> {row['Product Name']}")
     else:
-        # Try matching without prefixes like "Wholesale "
         product_key = product_key.replace("Wholesale ", "")
         if product_key in mappings["products"]:
             row["Product Name"] = mappings["products"][product_key]
             logger.debug(f"Translated Product: {product} -> {row['Product Name']}")
 
-    # Apply Terminal mapping
     terminal = row.get("Terminal", "")
-    supplier = row.get("Supplier", "")  # Use updated Supplier
+    supplier = row.get("Supplier", "")
     if terminal in mappings["terminals"]:
         for mapping in mappings["terminals"][terminal]:
             condition = mapping["condition"]
@@ -330,7 +307,7 @@ def load_prompt(filename: str) -> str:
     with open(prompt_path, "r", encoding="utf-8") as f:
         return f.read()
 
-async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession) -> Optional[str]:
+async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession, process_id: str) -> Optional[str]:
     try:
         api_url = "https://api.x.ai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {env['XAI_API_KEY']}", "Content-Type": "application/json"}
@@ -344,6 +321,21 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
         async with session.post(api_url, headers=headers, json=payload) as response:
             response.raise_for_status()
             raw_text = await response.text()
+            # Extract rate limit information from headers (assuming xAI provides this)
+            remaining_requests = response.headers.get("X-RateLimit-Remaining", "Unknown")
+            total_requests = response.headers.get("X-RateLimit-Limit", "Unknown")
+            if remaining_requests != "Unknown" and total_requests != "Unknown":
+                try:
+                    remaining_requests = int(remaining_requests)
+                    total_requests = int(total_requests)
+                    # Update process_status with token information
+                    if process_id in process_status:
+                        process_status[process_id]["remaining_requests"] = remaining_requests
+                        process_status[process_id]["total_requests"] = total_requests
+                        save_process_status(process_id, process_status[process_id])
+                        logger.debug(f"Updated token info for process {process_id}: {remaining_requests}/{total_requests} requests remaining")
+                except ValueError:
+                    logger.warning(f"Invalid rate limit headers: Remaining={remaining_requests}, Total={total_requests}")
         data = json.loads(raw_text)
         return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
     except Exception as e:
@@ -358,7 +350,6 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         if not content:
             raise ValueError("Empty email content")
 
-        # Load mappings
         mappings = load_mappings("mappings.xlsx")
 
         content_lower = content.lower()
@@ -371,7 +362,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
 
-        parsed = await call_grok_api(prompt_chat, content, env, session)
+        parsed = await call_grok_api(prompt_chat, content, env, session, process_id)
         logger.debug(f"Grok raw response for UID {email.get('uid', '?')}: {parsed}")
         if parsed.startswith("```json"):
             match = re.search(r"```json\s*(.*?)\s*```", parsed, re.DOTALL)
@@ -381,20 +372,17 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         rows = json.loads(parsed)
         logger.debug(f"Parsed {len(rows)} rows from email UID {email.get('uid', '?')}: {rows}")
         for row in rows:
-            # Validate required fields
             if not row.get("Product Name") or not row.get("Terminal") or not isinstance(row.get("Price"), (int, float)):
                 logger.debug(f"Skipping row due to missing required fields: {row}")
                 continue
-            # Convert price from cents to dollars for OPIS emails
             price = row.get("Price", 0)
-            if is_opis and price > 10:  # Assume prices > 10 are in cents
+            if is_opis and price > 10:
                 price = price / 100
                 row["Price"] = price
                 logger.debug(f"Converted price from cents to dollars: {row}")
-            if price > 10:  # Check price after conversion
+            if price > 10:
                 logger.debug(f"Skipping row due to price > 10: {row}")
                 continue
-            # Apply mappings to the row
             row = apply_mappings(row, mappings)
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
@@ -417,7 +405,6 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
     return valid_rows, skipped_rows, failed_email
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
-    # Set up file logging for this process
     file_handler = setup_file_logging(process_id)
     try:
         env = load_env()
@@ -429,6 +416,8 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
             "output_file": None,
             "error": None,
             "debug_log": f"debug_{process_id}.txt",
+            "remaining_requests": "Unknown",
+            "total_requests": "Unknown",
         }
         process_statuses[process_id] = initial_status
         save_process_status(process_id, initial_status)
@@ -476,8 +465,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
         save_process_status(process_id, process_statuses[process_id])
         logger.info(f"Completed process {process_id} with {total_rows} rows")
 
-        # Delay deletion of status file to ensure frontend can retrieve it
-        await asyncio.sleep(30)  # Wait 30 seconds before deleting
+        await asyncio.sleep(60)
         delete_process_status(process_id)
     except Exception as e:
         logger.error(f"Error in process_all_emails for process {process_id}: {str(e)}")
