@@ -2,12 +2,22 @@
 import asyncio
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware  # Add CORS middleware
 from parser import process_all_emails, initialize_mappings, load_process_status, delete_process_status
 from uuid import uuid4
 from pathlib import Path
 import logging
 
 app = FastAPI()
+
+# Add CORS middleware to allow requests from the frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://bde-frontend-pf3m.onrender.com"],  # Allow the frontend origin
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 # Initialize mappings at startup
 @app.on_event("startup")
