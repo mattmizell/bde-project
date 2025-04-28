@@ -250,7 +250,11 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         if not content:
             raise ValueError("Empty email content")
 
-        is_opis = "OPIS" in content and ("Rack" in content or "Wholesale" in content) and "Effective Date" in content
+        # Updated OPIS classification logic
+        content_lower = content.lower()
+        subject_lower = email.get("subject", "").lower()
+        is_opis = ("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
+                  ("opis" in subject_lower and ("rack" in subject_lower or "wholesale" in subject_lower))
         logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
         logger.debug(f"Email subject: {email.get('subject', '')}")
         logger.debug(f"Email content (first 500 chars): {content[:500]}")
@@ -271,7 +275,13 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             if not row.get("Product Name") or not row.get("Terminal") or not isinstance(row.get("Price"), (int, float)):
                 logger.debug(f"Skipping row due to missing required fields: {row}")
                 continue
-            if row.get("Price", 0) > 10:
+            # Convert price from cents to dollars for OPIS emails
+            price = row.get("Price", 0)
+            if is_opis and price > 10:  # Assume prices > 10 are in cents
+                price = price / 100
+                row["Price"] = price
+                logger.debug(f"Converted price from cents to dollars: {row}")
+            if price > 10:  # Check price after conversion
                 logger.debug(f"Skipping row due to price > 10: {row}")
                 continue
             valid_rows.append({
@@ -279,7 +289,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
                 "Supply": row.get("Supply", ""),
                 "Product Name": row.get("Product Name", ""),
                 "Terminal": row.get("Terminal", ""),
-                "Price": row.get("Price", 0),
+                "Price": price,
                 "Volume Type": row.get("Volume Type", ""),
                 "Effective Date": row.get("Effective Date", ""),
                 "Effective Time": row.get("Effective Time", ""),
