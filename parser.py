@@ -512,16 +512,13 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
             ]
         }
 
-        # ✅ Logging details before the call
         logger.info(f"Prompt loaded (first 200 chars): {prompt[:200].replace(chr(10), ' ')}")
         logger.info(f"Content to parse (first 200 chars): {content[:200].replace(chr(10), ' ')}")
-        logger.debug(f"Full prompt:\n{prompt}")
-        logger.debug(f"Full content:\n{content}")
         logger.debug(f"API payload:\n{json.dumps(payload, indent=2)}")
 
         async def make_request():
             logger.info(f"Sending POST request to {api_url}")
-            async with session.post(api_url, headers=headers, json=payload, timeout=30) as response:
+            async with session.post(api_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=90)) as response:
                 logger.info(f"Response status: {response.status}")
                 response.raise_for_status()
                 data = await response.json()
@@ -529,7 +526,7 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
                 return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
         request_task = asyncio.create_task(make_request())
-        timeout = 35  # Seconds
+        timeout = 90  # seconds
         start_time = datetime.now()
         logger.info(f"API request start time: {start_time}")
 
@@ -539,21 +536,25 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
             logger.info(f"API request end time: {end_time}, duration: {(end_time - start_time).total_seconds()} seconds")
             logger.info(f"API call completed successfully, result: {result[:200]}...")
             return result
+
         except asyncio.TimeoutError:
-            logger.error(f"Grok API call timed out at coroutine level after {timeout} seconds for process {process_id}")
+            logger.error(f"Grok API call timed out after {timeout} seconds for process {process_id}. Retrying once...")
             request_task.cancel()
             try:
                 await request_task
             except asyncio.CancelledError:
-                logger.info("API request task was successfully cancelled")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error while waiting for Grok API: {e}")
-            return None
+                logger.info("First API request task was successfully cancelled")
 
-    except aiohttp.ClientTimeout:
-        logger.error(f"Grok API call timed out at HTTP level after 30 seconds for process {process_id}")
-        return None
+            # Retry once
+            try:
+                retry_task = asyncio.create_task(make_request())
+                result = await asyncio.wait_for(retry_task, timeout=timeout)
+                logger.info(f"Retry successful for process {process_id}")
+                return result
+            except Exception as e:
+                logger.error(f"Retry also failed for process {process_id}: {e}")
+                return None
+
     except Exception as e:
         logger.error(f"Grok API call failed for process {process_id}: {e}")
         return None
