@@ -463,28 +463,39 @@ def mark_email_as_processed(uid: str, env: Dict[str, str]) -> None:
 
 # --- Grok API Functions ---
 def load_prompt(filename: str) -> str:
-    logger.debug(f"Entering load_prompt with filename: {filename}")
+    logger.info(f"Loading prompt from file: {filename}")
     prompt_path = PROMPT_DIR / filename
-    logger.debug(f"Loading prompt from: {prompt_path}")
+    logger.info(f"Resolved prompt path: {prompt_path}")
     with open(prompt_path, "r", encoding="utf-8") as f:
         prompt = f.read()
-    logger.debug(f"Loaded prompt (first 500 chars): {prompt[:500]}...")
-    logger.debug("Exiting load_prompt")
+    logger.info(f"Loaded prompt (first 200 chars): {prompt[:200].replace(chr(10), ' ')}...")
     return prompt
+
 
 async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession, process_id: str) -> Optional[str]:
     logger.info(f"Entering call_grok_api for process {process_id}")
+
     try:
         api_url = "https://api.x.ai/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {env['XAI_API_KEY']}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {env['XAI_API_KEY']}",
+            "Content-Type": "application/json"
+        }
+
         payload = {
             "model": env.get("MODEL", "grok-3-latest"),
             "messages": [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": content},
+                {"role": "user", "content": content}
             ]
         }
-        logger.info(f"Preparing to make Grok API call for process {process_id}")
+
+        # ✅ Logging details before the call
+        logger.info(f"Prompt loaded (first 200 chars): {prompt[:200].replace(chr(10), ' ')}")
+        logger.info(f"Content to parse (first 200 chars): {content[:200].replace(chr(10), ' ')}")
+        logger.debug(f"Full prompt:\n{prompt}")
+        logger.debug(f"Full content:\n{content}")
+        logger.debug(f"API payload:\n{json.dumps(payload, indent=2)}")
 
         async def make_request():
             logger.info(f"Sending POST request to {api_url}")
@@ -496,7 +507,7 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
                 return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
         request_task = asyncio.create_task(make_request())
-        timeout = 35  # Total timeout in seconds
+        timeout = 35  # Seconds
         start_time = datetime.now()
         logger.info(f"API request start time: {start_time}")
 
@@ -504,7 +515,7 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
             result = await asyncio.wait_for(request_task, timeout=timeout)
             end_time = datetime.now()
             logger.info(f"API request end time: {end_time}, duration: {(end_time - start_time).total_seconds()} seconds")
-            logger.info(f"API call completed successfully, result: {result}")
+            logger.info(f"API call completed successfully, result: {result[:200]}...")
             return result
         except asyncio.TimeoutError:
             logger.error(f"Grok API call timed out at coroutine level after {timeout} seconds for process {process_id}")
