@@ -488,6 +488,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
     return valid_rows, skipped_rows, failed_email
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
+    logger.info(f"Parser.py version: 2025-04-28 with fixed prompt file path")
     file_handler = setup_file_logging(process_id)
     try:
         env = load_env()
@@ -546,7 +547,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
         save_process_status(process_id, process_statuses[process_id])
         logger.info(f"Completed process {process_id} with {total_rows} rows")
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(300)  # Increased to 5 minutes
         delete_process_status(process_id)
     except Exception as e:
         logger.error(f"Error in process_all_emails for process {process_id}: {str(e)}")
