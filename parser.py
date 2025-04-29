@@ -378,7 +378,6 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
         return None
 
 # --- Processing Functions ---
-# --- Processing Functions ---
 async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str, session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
     valid_rows, skipped_rows, failed_email = [], [], None
     try:
@@ -398,39 +397,54 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
         logger.debug(f"Email subject: {email.get('subject', '')}")
         logger.debug(f"Email content (first 500 chars): {content[:500]}")
-        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"  # Fixed path (no extra "prompts/")
+        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_path = PROMPT_DIR / prompt_file
-        logger.debug(f"Attempting to load prompt file from: {prompt_path}")  # Log the resolved path
+        logger.debug(f"Attempting to load prompt file from: {prompt_path}")
         prompt_chat = load_prompt(prompt_file)
 
-        # Extract supplier from forwarded email or original sender
+        # Extract supplier by looking for known domains (only from SupplierMappings tab)
         email_from = email.get("from_addr", "")
-        supplier = ""
-        if "From:" in content:
-            forwarded_from_match = re.search(r"From:\s*(.*?)\s*(?:<([^>]+)>|$)", content, re.IGNORECASE)
-            if forwarded_from_match:
-                name, email_addr = forwarded_from_match.groups()
+        supplier = None
+        domain_to_supplier = mappings["domain_to_supplier"]
+
+        # Step 1: Check the from_addr field
+        if '@' in email_from:
+            email_addr = email_from.split('<')[-1].strip('>').lower()
+            domain = email_addr.split('@')[-1].split('.')[0] + '.' + email_addr.split('.')[-1]
+            if domain in domain_to_supplier:
+                mapped_supplier = domain_to_supplier[domain]
+                # Only set supplier if it's not OPIS (OPIS supplier is handled by is_opis check later)
+                if domain != "opisnet.com":
+                    supplier = mapped_supplier
+                    logger.debug(f"Supplier identified from from_addr for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
+            else:
+                logger.debug(f"No supplier domain matched in from_addr for UID {email.get('uid', '?')}: {email_addr}, will check forwarded From: line")
+
+        # Step 2: If no supplier found and email is forwarded, check the From: line in content
+        if supplier is None and "From:" in content:
+            forwarded_from_matches = re.finditer(r"From:\s*(.*?)\s*(?:<([^>]+)>|$)", content, re.IGNORECASE)
+            for match in forwarded_from_matches:
+                name, email_addr = match.groups()
                 if email_addr:
-                    domain = email_addr.split('@')[-1].split('.')[0]
-                    supplier = domain.replace("wallis", "Wallis Oil Company").replace("bylo", "By-Lo Oil Company").title()
-                    logger.debug(f"Extracted forwarded sender for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
+                    email_addr = email_addr.lower()
+                    domain = email_addr.split('@')[-1].split('.')[0] + '.' + email_addr.split('.')[-1]
+                    if domain in domain_to_supplier:
+                        mapped_supplier = domain_to_supplier[domain]
+                        if domain != "opisnet.com":  # Skip OPIS domains, handled by is_opis
+                            supplier = mapped_supplier
+                            logger.debug(f"Supplier identified from forwarded From: line for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
+                            break  # Stop at the first valid supplier
+                        else:
+                            logger.debug(f"Forwarded From: domain {domain} is OPIS, skipping as supplier")
+                    else:
+                        logger.debug(f"No supplier domain matched in forwarded From: line for UID {email.get('uid', '?')}: {email_addr}, continuing search")
                 else:
-                    supplier = name.strip() if name else email_from
-                    logger.debug(f"No email address in forwarded sender, using name: {supplier}")
-            else:
-                supplier_match = re.search(r'^(.*?)(?:\s*<|$)', email_from)
-                supplier = supplier_match.group(1).strip() if supplier_match else email_from
-                logger.debug(f"No forwarded sender found, using email_from: {supplier}")
-        else:
-            supplier_match = re.search(r'^(.*?)\s*(?:<[^>]+>|$)', email_from)
-            if supplier_match and '@' in email_from:
-                email_addr = email_from.split('<')[-1].strip('>')
-                domain = email_addr.split('@')[-1].split('.')[0]
-                supplier = domain.replace("wallis", "Wallis Oil Company").replace("bylo", "By-Lo Oil Company").title()
-                logger.debug(f"Extracted supplier from email domain for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
-            else:
-                supplier = supplier_match.group(1).strip() if supplier_match else email_from
-                logger.debug(f"Using email_from for UID {email.get('uid', '?')}: {supplier}")
+                    logger.debug(f"No email address in forwarded From: line for UID {email.get('uid', '?')}, name: {name}")
+
+        # Step 3: If still no supplier, log a warning and use a default
+        if supplier is None:
+            supplier = "Unknown Supplier"
+            logger.warning(f"Could not identify supplier for UID {email.get('uid', '?')}, using default: {supplier}")
 
         parsed = await call_grok_api(prompt_chat, content, env, session, process_id)
         if parsed is None:
@@ -459,13 +473,16 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
                 logger.debug(f"Skipping row due to missing or invalid required fields: {row}")
                 continue
             price = row.get("Price", 0)
-            if price > 10:
+            if price > 5:  # Adjusted threshold to catch prices like 9.0
                 price = price / 100
                 row["Price"] = price
                 logger.debug(f"Converted price from cents to dollars: {row}")
-            if price > 10:
-                logger.debug(f"Skipping row due to price > 10: {row}")
+            if price > 5:
+                logger.debug(f"Skipping row due to price > 5: {row}")
                 continue
+            # Set supplier for non-OPIS emails; leave blank for OPIS emails
+            if not is_opis:
+                row["Supplier"] = supplier
             row = apply_mappings(row, mappings, is_opis, email_from=supplier)
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
