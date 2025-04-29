@@ -524,154 +524,100 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
         return None
 
 # --- Processing Functions ---
-async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str, session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
+async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str,
+                                   session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
     logger.debug(f"Entering process_email_with_delay for UID {email.get('uid', '?')} in process {process_id}")
     valid_rows, skipped_rows, failed_email = [], [], None
+
     try:
-        logger.debug("Cleaning email content")
         content = clean_email_content(email.get("content", ""))
         if not content:
-            logger.error("Empty email content after cleaning")
             raise ValueError("Empty email content")
 
-        logger.debug(f"Cleaned email content for UID {email.get('uid', '?')}: {content[:500]}...")
-
-        logger.debug("Loading mappings")
         mappings = load_mappings("mappings.xlsx")
-        logger.debug(f"Mappings loaded: {mappings.keys()}")
+        domain_to_supplier = {k.strip().lower(): v.strip() for k, v in mappings.get("domain_to_supplier", {}).items()}
 
         content_lower = content.lower()
         subject_lower = email.get("subject", "").lower()
-        logger.debug(f"Content (lowercase, first 500 chars): {content_lower[:500]}...")
-        logger.debug(f"Subject (lowercase): {subject_lower}")
-        is_opis = (("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
-                   ("opis" in subject_lower and ("rack" in subject_lower or "wholesale" in subject_lower))) and \
-                   not ("From:" in content and "wallis" in content_lower)
-        logger.debug(f"Email UID {email.get('uid', '?')} classified as {'OPIS' if is_opis else 'Supplier'}")
-        logger.debug(f"Email subject: {email.get('subject', '')}")
-        logger.debug(f"Email content (first 500 chars): {content[:500]}")
-        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
-        prompt_path = PROMPT_DIR / prompt_file
-        logger.debug(f"Attempting to load prompt file from: {prompt_path}")
-        prompt_chat = load_prompt(prompt_file)
-        logger.debug("Prompt loaded successfully")
+        is_opis = ("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
+                  ("opis" in subject_lower and ("rack" in subject_lower or "wholesale" in subject_lower))
 
-        # Extract supplier by looking for known domains (only from SupplierMappings tab)
+        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
+        prompt_chat = load_prompt(prompt_file)
+
+        # --- SUPPLIER DETECTION ---
         email_from = email.get("from_addr", "")
         supplier = None
-        domain_to_supplier = mappings["domain_to_supplier"]
-        logger.info(f"Starting supplier extraction for UID {email.get('uid', '?')}, from_addr: {email_from!r}")
 
+        # Try extracting supplier from sender
         if email_from:
-            # Handle various email formats: "email@domain.com", "Name <email@domain.com>", or malformed
-            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', email_from)
+            email_match = re.search(r"[\w\.-]+@[\w\.-]+", email_from)
             if email_match:
-                email_addr = email_match.group(0).lower()
-                logger.info(f"Extracted email address: {email_addr}")
-                try:
-                    domain = email_addr.split('@')[-1]
-                    logger.info(f"Extracted domain: {domain}")
-                    logger.info(f"Available domains in domain_to_supplier: {list(domain_to_supplier.keys())}")
-                    if domain in domain_to_supplier:
-                        mapped_supplier = domain_to_supplier[domain]
-                        logger.info(f"Found domain '{domain}' in domain_to_supplier, mapped to: {mapped_supplier}")
-                        if domain != "opisnet.com":
-                            supplier = mapped_supplier
-                            logger.info(f"Supplier identified from from_addr for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
-                        else:
-                            logger.info(f"Domain {domain} identified as OPIS, supplier will be blank")
-                    else:
-                        logger.info(f"No supplier domain matched in from_addr for UID {email.get('uid', '?')}: {domain}, will check forwarded From: line")
-                except Exception as e:
-                    logger.warning(f"Failed to extract domain from from_addr for UID {email.get('uid', '?')}: {email_addr}, error: {e}")
-            else:
-                logger.warning(f"No valid email address found in from_addr for UID {email.get('uid', '?')}: {email_from!r}")
+                domain = email_match.group(0).split("@")[-1].strip().lower()
+                logger.info(f"Parsed domain from from_addr: {domain}")
+                supplier = domain_to_supplier.get(domain)
 
-        if supplier is None and "From:" in content:
-            logger.info("Checking for forwarded From: line in content")
-            forwarded_from_matches = re.finditer(r"From:\s*(.*?)\s*(?:<([^>]+)>|$)", content, re.IGNORECASE)
-            for match in forwarded_from_matches:
+        # Try extracting supplier from forwarded From: line if needed
+        if not supplier and "From:" in content:
+            forwarded_matches = re.finditer(r"From:\s*(.*?)\s*(?:<([^>]+)>|$)", content, re.IGNORECASE)
+            for match in forwarded_matches:
                 name, email_addr = match.groups()
                 if email_addr:
-                    email_addr = email_addr.lower()
-                    logger.info(f"Found forwarded From: line with email: {email_addr}")
-                    try:
-                        domain = email_addr.split('@')[-1]
-                        logger.info(f"Extracted domain from forwarded From: {domain}")
-                        if domain in domain_to_supplier:
-                            mapped_supplier = domain_to_supplier[domain]
-                            logger.info(f"Found domain '{domain}' in domain_to_supplier, mapped to: {mapped_supplier}")
-                            if domain != "opisnet.com":
-                                supplier = mapped_supplier
-                                logger.info(f"Supplier identified from forwarded From: line for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
-                                break
-                            else:
-                                logger.info(f"Forwarded From: domain {domain} is OPIS, skipping as supplier")
-                        else:
-                            logger.info(f"No supplier domain matched in forwarded From: line for UID {email.get('uid', '?')}: {domain}, continuing search")
-                    except Exception as e:
-                        logger.warning(f"Failed to extract domain from forwarded From: line for UID {email.get('uid', '?')}: {email_addr}, error: {e}")
-                else:
-                    logger.info(f"No email address in forwarded From: line for UID {email.get('uid', '?')}, name: {name}")
+                    domain = email_addr.split("@")[-1].strip().lower()
+                    logger.info(f"Parsed domain from forwarded From: {domain}")
+                    supplier = domain_to_supplier.get(domain)
+                    if supplier:
+                        break
 
-        if supplier is None:
+        if not supplier:
             supplier = "Unknown Supplier"
-            logger.warning(f"Could not identify supplier for UID {email.get('uid', '?')}, using default: {supplier}")
+            logger.warning(f"No supplier identified for UID {email.get('uid', '?')}, defaulting to Unknown Supplier")
 
-        logger.debug(f"Supplier extraction complete, supplier: {supplier}")
-
-        # Log before calling Grok API to confirm we reach this point
-        logger.info(f"Calling Grok API for UID {email.get('uid', '?')} in process {process_id}")
+        # --- CALL GROK ---
+        logger.info(f"Calling Grok API for UID {email.get('uid', '?')}")
         parsed = await call_grok_api(prompt_chat, content, env, session, process_id)
         logger.info(f"Grok API call returned for UID {email.get('uid', '?')}")
+
         if parsed is None:
-            logger.error("Grok API returned None")
             raise ValueError("Grok API returned None")
-        logger.debug(f"Grok raw response for UID {email.get('uid', '?')}: {parsed}")
 
+        # Extract JSON if inside ```json ... ```
         if parsed.startswith("```json"):
-            logger.debug("Extracting JSON from markdown code block")
-            match = re.search(r"```json\s*(.*?)\s*```", parsed, re.DOTALL)
-            if match:
-                parsed = match.group(1).strip()
-                logger.debug(f"Extracted JSON: {parsed}")
-            else:
-                logger.error("Failed to extract JSON from Grok response")
-                raise ValueError("Failed to extract JSON from Grok response")
+            parsed = re.sub(r"```json|```", "", parsed, flags=re.DOTALL).strip()
 
-        logger.debug("Parsing JSON response")
-        try:
-            rows = json.loads(parsed)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Grok response as JSON for UID {email.get('uid', '?')}: {parsed}")
-            raise ValueError(f"Invalid JSON in Grok response: {str(e)}")
+        rows = json.loads(parsed)
 
-        logger.debug(f"Parsed {len(rows)} rows from email UID {email.get('uid', '?')}: {rows}")
+        if not isinstance(rows, list):
+            raise ValueError("Grok response not a list")
+
+        logger.debug(f"Parsed {len(rows)} rows")
+
         for row in rows:
-            logger.debug(f"Processing row: {row}")
             if not isinstance(row, dict):
-                logger.debug(f"Skipping invalid row (not a dict): {row}")
                 continue
             if not row.get("Product Name") or not row.get("Terminal") or not isinstance(row.get("Price"), (int, float)):
-                logger.debug(f"Skipping row due to missing or invalid required fields: {row}")
                 continue
+
             price = row.get("Price", 0)
-            logger.debug(f"Checking price: {price}")
             if price > 5:
                 price = price / 100
                 row["Price"] = price
-                logger.debug(f"Converted price from cents to dollars: {row}")
+
             if price > 5:
-                logger.debug(f"Skipping row due to price > 5: {row}")
                 continue
+
+            # --- PATCH: Fill Supplier/Supply if missing ---
             if not is_opis:
-                logger.debug(f"Setting Supplier to {supplier} for non-OPIS email")
-                row["Supplier"] = supplier
+                if not row.get("Supplier"):
+                    row["Supplier"] = supplier
+                if not row.get("Supply"):
+                    row["Supply"] = supplier
             else:
-                logger.debug("OPIS email, leaving Supplier blank")
-            logger.debug(f"Applying mappings to row: {row}")
+                # For OPIS, Supplier stays blank
+                pass
+
             row = apply_mappings(row, mappings, is_opis, email_from=supplier)
-            logger.debug(f"Row after mappings: {row}")
+
             valid_rows.append({
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
@@ -682,28 +628,18 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
                 "Effective Date": row.get("Effective Date", ""),
                 "Effective Time": row.get("Effective Time", ""),
             })
-            logger.debug(f"Added row to valid_rows: {valid_rows[-1]}")
 
         if valid_rows:
-            logger.debug(f"Marking email UID {email.get('uid', '?')} as processed")
             mark_email_as_processed(email.get("uid", ""), env)
-            logger.info(f"Successfully parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
-            # Save process status after successfully processing an email
-            process_statuses = load_process_status(process_id) or {}
-            process_statuses["row_count"] = (process_statuses.get("row_count", 0) + len(valid_rows))
-            logger.debug(f"Updating process status with row_count: {process_statuses['row_count']}")
-            save_process_status(process_id, process_statuses)
+            logger.info(f"Parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
 
     except Exception as ex:
-        failed_email = {"email_id": email.get("uid", "?"), "subject": email.get("subject", ""), "from_addr": email.get("from_addr", ""), "error": str(ex)}
+        failed_email = {"email_id": email.get("uid", "?"), "subject": email.get("subject", ""),
+                        "from_addr": email.get("from_addr", ""), "error": str(ex)}
         logger.error(f"Failed to process email UID {email.get('uid', '?')}: {str(ex)}")
-        # Save process status on failure
-        process_statuses = load_process_status(process_id) or {}
-        process_statuses["error"] = str(ex)
-        logger.debug("Saving process status on failure")
-        save_process_status(process_id, process_statuses)
 
-    logger.debug(f"Exiting process_email_with_delay with valid_rows: {len(valid_rows)}, skipped_rows: {len(skipped_rows)}, failed_email: {failed_email}")
+    logger.debug(
+        f"Exiting process_email_with_delay with valid_rows: {len(valid_rows)}, skipped_rows: {len(skipped_rows)}, failed_email: {failed_email}")
     return valid_rows, skipped_rows, failed_email
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
