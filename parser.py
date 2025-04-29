@@ -376,12 +376,17 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
                 {"role": "user", "content": content},
             ]
         }
-        async with session.post(api_url, headers=headers, json=payload) as response:
+        logger.debug(f"Making Grok API call for process {process_id}")
+        async with session.post(api_url, headers=headers, json=payload, timeout=30) as response:
             response.raise_for_status()
             data = await response.json()
+            logger.debug(f"Grok API response received for process {process_id}")
             return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
+    except aiohttp.ClientTimeout:
+        logger.error(f"Grok API call timed out after 30 seconds for process {process_id}")
+        return None
     except Exception as e:
-        logger.error(f"Grok API call failed: {e}")
+        logger.error(f"Grok API call failed for process {process_id}: {e}")
         return None
 
 # --- Processing Functions ---
@@ -512,7 +517,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
     return valid_rows, skipped_rows, failed_email
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
-    logger.info(f"Parser.py version: 2025-04-28 with fixed prompt file path")
+    logger.info(f"Parser.py version: 2025-04-29 with domain_to_supplier fix, API timeout, and increased delay")
     file_handler = setup_file_logging(process_id)
     try:
         env = load_env()
@@ -561,7 +566,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
                     failed_email["content"] = email.get("content", "")
                     failed_emails.append(failed_email)
 
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)  # Increased delay to 5 seconds to avoid API rate limits
 
         if failed_emails:
             save_failed_emails_to_csv(failed_emails, output_file, process_id)
