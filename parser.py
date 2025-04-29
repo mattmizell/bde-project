@@ -119,10 +119,11 @@ def delete_process_status(process_id: str) -> None:
 def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
     try:
         xl = pd.ExcelFile(file_path)
-        mappings = {"suppliers": {}, "products": {}, "terminals": {}}
+        mappings = {"suppliers": {}, "domain_to_supplier": {}, "position_holders": {}, "products": {}, "terminals": {}}
 
         logger.debug(f"Available sheets in {file_path}: {xl.sheet_names}")
 
+        # Load SupplierMappings
         supplier_sheet = None
         for sheet_name in ["SupplierMappings", "Suppliers", "Supplier Mappings"]:
             if sheet_name in xl.sheet_names:
@@ -133,11 +134,39 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             for _, row in df_suppliers.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
+                domain = row.get("Domain", None)  # Use .get to avoid KeyError
+                if pd.isna(raw_value) or pd.isna(standardized_value):
+                    logger.warning(f"Skipping invalid row in SupplierMappings: {row.to_dict()}")
+                    continue
                 mappings["suppliers"][raw_value] = standardized_value
+                if domain and not pd.isna(domain):
+                    mappings["domain_to_supplier"][domain.lower()] = standardized_value
+                    logger.debug(f"Added domain mapping: {domain.lower()} -> {standardized_value}")
             logger.debug(f"Loaded {len(mappings['suppliers'])} supplier mappings from sheet '{supplier_sheet}'")
+            logger.debug(f"Loaded {len(mappings['domain_to_supplier'])} domain-to-supplier mappings")
         else:
             logger.warning("Supplier mappings sheet not found. Expected 'SupplierMappings', 'Suppliers', or 'Supplier Mappings'.")
 
+        # Load SupplyMappings
+        supply_sheet = None
+        for sheet_name in ["SupplyMappings", "Supply", "Supply Mappings"]:
+            if sheet_name in xl.sheet_names:
+                supply_sheet = sheet_name
+                break
+        if supply_sheet:
+            df_supply = xl.parse(supply_sheet)
+            for _, row in df_supply.iterrows():
+                raw_value = str(row["Raw Value"]).strip()
+                standardized_value = str(row["Standardized Value"]).strip()
+                if pd.isna(raw_value) or pd.isna(standardized_value):
+                    logger.warning(f"Skipping invalid row in SupplyMappings: {row.to_dict()}")
+                    continue
+                mappings["position_holders"][raw_value] = standardized_value
+            logger.debug(f"Loaded {len(mappings['position_holders'])} position holder mappings from sheet '{supply_sheet}'")
+        else:
+            logger.warning("Supply mappings sheet not found. Expected 'SupplyMappings', 'Supply', or 'Supply Mappings'.")
+
+        # Load ProductMappings
         product_sheet = None
         for sheet_name in ["ProductMappings", "Products", "Product Mappings"]:
             if sheet_name in xl.sheet_names:
@@ -148,11 +177,15 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             for _, row in df_products.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
+                if pd.isna(raw_value) or pd.isna(standardized_value):
+                    logger.warning(f"Skipping invalid row in ProductMappings: {row.to_dict()}")
+                    continue
                 mappings["products"][raw_value] = standardized_value
             logger.debug(f"Loaded {len(mappings['products'])} product mappings from sheet '{product_sheet}'")
         else:
             logger.warning("Product mappings sheet not found. Expected 'ProductMappings', 'Products', or 'Product Mappings'.")
 
+        # Load TerminalMappings
         terminal_sheet = None
         for sheet_name in ["TerminalMappings", "Terminals", "Terminal Mappings"]:
             if sheet_name in xl.sheet_names:
@@ -164,6 +197,9 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
                 condition = row.get("Condition", None)
+                if pd.isna(raw_value) or pd.isna(standardized_value):
+                    logger.warning(f"Skipping invalid row in TerminalMappings: {row.to_dict()}")
+                    continue
                 if raw_value not in mappings["terminals"]:
                     mappings["terminals"][raw_value] = []
                 mappings["terminals"][raw_value].append({
@@ -174,68 +210,39 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
         else:
             logger.warning("Terminal mappings sheet not found. Expected 'TerminalMappings', 'Terminals', or 'Terminal Mappings'.")
 
-        logger.debug(f"Total mappings loaded: Suppliers={len(mappings['suppliers'])}, Products={len(mappings['products'])}, Terminals={len(mappings['terminals'])}")
+        logger.debug(f"Total mappings loaded: Suppliers={len(mappings['suppliers'])}, Domains={len(mappings['domain_to_supplier'])}, Position Holders={len(mappings['position_holders'])}, Products={len(mappings['products'])}, Terminals={len(mappings['terminals'])}")
         return mappings
     except Exception as e:
         logger.error(f"Failed to load mappings from {file_path}: {e}")
-        return {"suppliers": {}, "products": {}, "terminals": {}}
+        return {
+            "suppliers": {},
+            "domain_to_supplier": {},
+            "position_holders": {},
+            "products": {},
+            "terminals": {}
+        }
 
 # --- Extract Position Holder from Terminal ---
 def extract_position_holder(terminal: str) -> str:
-    # Common position holders
-    position_holders = {
-        "FH": "Flint Hills",
-        "GMK": "Growmark",
-        "SC": "Sinclair",
-        "VL": "Valero",
-        "JDS": "JDS",
-        "MG": "Magellan",
-        "HEP": "Holly Energy Partners",
-        "STL": "St. Louis",
-        "KMEP": "Kinder Morgan Energy Partners",
-        "PSX": "Phillips 66",
-        "Marathon": "Marathon"
-    }
-    # Split terminal by common separators: -, /, commas, and spaces
-    parts = re.split(r'[-/,]|\s+', terminal.strip())
-    # Remove empty parts and normalize
-    parts = [part.strip() for part in parts if part.strip()]
-
-    # Check each part against known position holders
-    for part in parts:
-        if part in position_holders:
-            return position_holders[part]
-        # Also check for prefixes (e.g., "MG" in "MG-BETTENDORF")
-        for prefix, holder in position_holders.items():
-            if part.startswith(prefix) and prefix != "Marathon":  # Marathon is a full match, not a prefix
-                return holder
-
-    # Fallback: Use the last part if no match (e.g., "Marathon" at the end)
-    return parts[-1] if parts else terminal
+    mappings = load_mappings("mappings.xlsx")
+    position_holders = mappings["position_holders"]
+    terminal_lower = terminal.lower()
+    for raw_value, standardized_value in position_holders.items():
+        if raw_value.lower() in terminal_lower:
+            return standardized_value
+    return ""  # Return empty string if no position holder is found
 
 # --- Apply Mappings to Rows ---
 def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_from: str) -> Dict:
-    # Supplier: For non-OPIS emails, use the email sender; for OPIS, use the parsed supplier
-    if not is_opis:
-        # Extract supplier from email "From" field (e.g., "Luke Oil Company <email@domain.com>")
-        supplier_match = re.search(r'^(.*?)(?:\s*<|$)', email_from)
-        supplier = supplier_match.group(1).strip() if supplier_match else email_from
-        row["Supplier"] = supplier
-    else:
-        supplier = row.get("Supplier", "")
-
-    # Apply supplier mapping
-    if supplier in mappings["suppliers"]:
+    supplier = row.get("Supplier", "")
+    # For OPIS emails, supplier should remain blank unless explicitly set in the parsed data
+    if not is_opis and supplier in mappings["suppliers"]:
         row["Supplier"] = mappings["suppliers"][supplier]
         logger.debug(f"Translated Supplier: {supplier} -> {row['Supplier']}")
 
-    # Supply: Extract position holder from terminal
+    # Supply: Extract position holder from terminal using the SupplyMappings tab
     terminal = row.get("Terminal", "")
     supply = extract_position_holder(terminal)
-    # Apply supplier mapping to supply (position holder)
-    if supply in mappings["suppliers"]:
-        supply = mappings["suppliers"][supply]
-        logger.debug(f"Translated Supply: {supply} -> {mappings['suppliers'][supply]}")
     row["Supply"] = supply
 
     # Product mappings
