@@ -330,7 +330,9 @@ def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
         imap_server.select("INBOX")
         since_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
         _, msg_nums = imap_server.search(None, f'(SINCE "{since_date}") UNSEEN')
-        for num in msg_nums[0].split():
+        msg_nums_list = msg_nums[0].split()
+        max_emails = 3  # Limit to 3 emails to reduce runtime
+        for num in msg_nums_list[:max_emails]:
             _, data = imap_server.fetch(num, "(RFC822)")
             msg = BytesParser(policy=policy.default).parsebytes(data[0][1])
             content = choose_best_content_from_email(msg)
@@ -419,20 +421,17 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         supplier = None
         domain_to_supplier = mappings["domain_to_supplier"]
 
-        # Step 1: Check the from_addr field
         if '@' in email_from:
             email_addr = email_from.split('<')[-1].strip('>').lower()
             domain = email_addr.split('@')[-1].split('.')[0] + '.' + email_addr.split('.')[-1]
             if domain in domain_to_supplier:
                 mapped_supplier = domain_to_supplier[domain]
-                # Only set supplier if it's not OPIS (OPIS supplier is handled by is_opis check later)
                 if domain != "opisnet.com":
                     supplier = mapped_supplier
                     logger.debug(f"Supplier identified from from_addr for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
             else:
                 logger.debug(f"No supplier domain matched in from_addr for UID {email.get('uid', '?')}: {email_addr}, will check forwarded From: line")
 
-        # Step 2: If no supplier found and email is forwarded, check the From: line in content
         if supplier is None and "From:" in content:
             forwarded_from_matches = re.finditer(r"From:\s*(.*?)\s*(?:<([^>]+)>|$)", content, re.IGNORECASE)
             for match in forwarded_from_matches:
@@ -442,10 +441,10 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
                     domain = email_addr.split('@')[-1].split('.')[0] + '.' + email_addr.split('.')[-1]
                     if domain in domain_to_supplier:
                         mapped_supplier = domain_to_supplier[domain]
-                        if domain != "opisnet.com":  # Skip OPIS domains, handled by is_opis
+                        if domain != "opisnet.com":
                             supplier = mapped_supplier
                             logger.debug(f"Supplier identified from forwarded From: line for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
-                            break  # Stop at the first valid supplier
+                            break
                         else:
                             logger.debug(f"Forwarded From: domain {domain} is OPIS, skipping as supplier")
                     else:
@@ -453,7 +452,6 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
                 else:
                     logger.debug(f"No email address in forwarded From: line for UID {email.get('uid', '?')}, name: {name}")
 
-        # Step 3: If still no supplier, log a warning and use a default
         if supplier is None:
             supplier = "Unknown Supplier"
             logger.warning(f"Could not identify supplier for UID {email.get('uid', '?')}, using default: {supplier}")
@@ -485,14 +483,13 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
                 logger.debug(f"Skipping row due to missing or invalid required fields: {row}")
                 continue
             price = row.get("Price", 0)
-            if price > 5:  # Adjusted threshold to catch prices like 9.0
+            if price > 5:
                 price = price / 100
                 row["Price"] = price
                 logger.debug(f"Converted price from cents to dollars: {row}")
             if price > 5:
                 logger.debug(f"Skipping row due to price > 5: {row}")
                 continue
-            # Set supplier for non-OPIS emails; leave blank for OPIS emails
             if not is_opis:
                 row["Supplier"] = supplier
             row = apply_mappings(row, mappings, is_opis, email_from=supplier)
@@ -510,10 +507,18 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         if valid_rows:
             mark_email_as_processed(email.get("uid", ""), env)
             logger.info(f"Successfully parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
+            # Save process status after successfully processing an email
+            process_statuses = load_process_status(process_id) or {}
+            process_statuses["row_count"] = (process_statuses.get("row_count", 0) + len(valid_rows))
+            save_process_status(process_id, process_statuses)
 
     except Exception as ex:
         failed_email = {"email_id": email.get("uid", "?"), "subject": email.get("subject", ""), "from_addr": email.get("from_addr", ""), "error": str(ex)}
         logger.error(f"Failed to process email UID {email.get('uid', '?')}: {str(ex)}")
+        # Save process status on failure
+        process_statuses = load_process_status(process_id) or {}
+        process_statuses["error"] = str(ex)
+        save_process_status(process_id, process_statuses)
     return valid_rows, skipped_rows, failed_email
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
@@ -566,7 +571,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
                     failed_email["content"] = email.get("content", "")
                     failed_emails.append(failed_email)
 
-                await asyncio.sleep(5)  # Increased delay to 5 seconds to avoid API rate limits
+                await asyncio.sleep(5)  # Increased delay to avoid API rate limits
 
         if failed_emails:
             save_failed_emails_to_csv(failed_emails, output_file, process_id)
