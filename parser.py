@@ -42,7 +42,7 @@ logger.handlers = []
 
 # Add a console handler for Render logs
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)  # Output DEBUG level logs
+console_handler.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
@@ -53,6 +53,15 @@ logger.propagate = False
 # Set other loggers to INFO level to reduce noise
 logging.getLogger("aiohttp").setLevel(logging.INFO)
 logging.getLogger("asyncio").setLevel(logging.INFO)
+
+# As a fallback, add a DEBUG-level console handler to the root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
+    root_console_handler = logging.StreamHandler()
+    root_console_handler.setLevel(logging.DEBUG)
+    root_console_handler.setFormatter(formatter)
+    root_logger.addHandler(root_console_handler)
 
 # Output, Prompts, and State directories
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -457,7 +466,7 @@ def load_prompt(filename: str) -> str:
     return prompt
 
 async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession, process_id: str) -> Optional[str]:
-    logger.debug(f"Entering call_grok_api for process {process_id}")
+    logger.info(f"Entering call_grok_api for process {process_id}")
     try:
         api_url = "https://api.x.ai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {env['XAI_API_KEY']}", "Content-Type": "application/json"}
@@ -468,38 +477,43 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
                 {"role": "user", "content": content},
             ]
         }
-        logger.debug(f"Preparing to make Grok API call for process {process_id} with payload: {payload}")
+        logger.info(f"Preparing to make Grok API call for process {process_id}")
         async def make_request():
-            logger.debug(f"Sending POST request to {api_url}")
+            logger.info(f"Sending POST request to {api_url}")
             async with session.post(api_url, headers=headers, json=payload, timeout=30) as response:
-                logger.debug(f"Response status: {response.status}")
+                logger.info(f"Response status: {response.status}")
                 response.raise_for_status()
                 data = await response.json()
-                logger.debug(f"Grok API response received for process {process_id}: {data}")
+                logger.info(f"Grok API response received for process {process_id}")
                 return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
+        # Create a task for the API request
+        request_task = asyncio.create_task(make_request())
+        timeout = 35  # Total timeout in seconds
+        start_time = datetime.now()
+        logger.info(f"API request start time: {start_time}")
+
+        # Wait for the task with a timeout
         try:
-            logger.debug("Starting API request with asyncio.wait_for")
-            start_time = datetime.now()
-            logger.debug(f"API request start time: {start_time}")
-            result = await asyncio.wait_for(make_request(), timeout=35)
+            result = await asyncio.wait_for(request_task, timeout=timeout)
             end_time = datetime.now()
-            logger.debug(f"API request end time: {end_time}, duration: {(end_time - start_time).total_seconds()} seconds")
-            logger.debug(f"API call completed successfully, result: {result}")
-            logger.debug("Exiting call_grok_api with result")
+            logger.info(f"API request end time: {end_time}, duration: {(end_time - start_time).total_seconds()} seconds")
+            logger.info(f"API call completed successfully, result: {result}")
             return result
         except asyncio.TimeoutError:
-            logger.error(f"Grok API call timed out at coroutine level after 35 seconds for process {process_id}")
-            logger.debug("Exiting call_grok_api with None due to coroutine timeout")
+            logger.error(f"Grok API call timed out at coroutine level after {timeout} seconds for process {process_id}")
+            request_task.cancel()
+            try:
+                await request_task
+            except asyncio.CancelledError:
+                logger.info("API request task was successfully cancelled")
             return None
 
     except aiohttp.ClientTimeout:
         logger.error(f"Grok API call timed out at HTTP level after 30 seconds for process {process_id}")
-        logger.debug("Exiting call_grok_api with None due to HTTP timeout")
         return None
     except Exception as e:
         logger.error(f"Grok API call failed for process {process_id}: {e}")
-        logger.debug("Exiting call_grok_api with None due to error")
         return None
 
 # --- Processing Functions ---
@@ -539,58 +553,59 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         email_from = email.get("from_addr", "")
         supplier = None
         domain_to_supplier = mappings["domain_to_supplier"]
-        logger.debug(f"Starting supplier extraction for UID {email.get('uid', '?')}, from_addr: {email_from!r}")
+        logger.info(f"Starting supplier extraction for UID {email.get('uid', '?')}, from_addr: {email_from!r}")
 
         if email_from:
             # Handle various email formats: "email@domain.com", "Name <email@domain.com>", or malformed
             email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', email_from)
             if email_match:
                 email_addr = email_match.group(0).lower()
-                logger.debug(f"Extracted email address: {email_addr}")
+                logger.info(f"Extracted email address: {email_addr}")
                 try:
                     domain = email_addr.split('@')[-1]
-                    logger.debug(f"Extracted domain: {domain}")
+                    logger.info(f"Extracted domain: {domain}")
+                    logger.info(f"Available domains in domain_to_supplier: {list(domain_to_supplier.keys())}")
                     if domain in domain_to_supplier:
                         mapped_supplier = domain_to_supplier[domain]
-                        logger.debug(f"Found domain '{domain}' in domain_to_supplier, mapped to: {mapped_supplier}")
+                        logger.info(f"Found domain '{domain}' in domain_to_supplier, mapped to: {mapped_supplier}")
                         if domain != "opisnet.com":
                             supplier = mapped_supplier
-                            logger.debug(f"Supplier identified from from_addr for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
+                            logger.info(f"Supplier identified from from_addr for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
                         else:
-                            logger.debug(f"Domain {domain} identified as OPIS, supplier will be blank")
+                            logger.info(f"Domain {domain} identified as OPIS, supplier will be blank")
                     else:
-                        logger.debug(f"No supplier domain matched in from_addr for UID {email.get('uid', '?')}: {domain}, will check forwarded From: line")
+                        logger.info(f"No supplier domain matched in from_addr for UID {email.get('uid', '?')}: {domain}, will check forwarded From: line")
                 except Exception as e:
                     logger.warning(f"Failed to extract domain from from_addr for UID {email.get('uid', '?')}: {email_addr}, error: {e}")
             else:
                 logger.warning(f"No valid email address found in from_addr for UID {email.get('uid', '?')}: {email_from!r}")
 
         if supplier is None and "From:" in content:
-            logger.debug("Checking for forwarded From: line in content")
+            logger.info("Checking for forwarded From: line in content")
             forwarded_from_matches = re.finditer(r"From:\s*(.*?)\s*(?:<([^>]+)>|$)", content, re.IGNORECASE)
             for match in forwarded_from_matches:
                 name, email_addr = match.groups()
                 if email_addr:
                     email_addr = email_addr.lower()
-                    logger.debug(f"Found forwarded From: line with email: {email_addr}")
+                    logger.info(f"Found forwarded From: line with email: {email_addr}")
                     try:
                         domain = email_addr.split('@')[-1]
-                        logger.debug(f"Extracted domain from forwarded From: {domain}")
+                        logger.info(f"Extracted domain from forwarded From: {domain}")
                         if domain in domain_to_supplier:
                             mapped_supplier = domain_to_supplier[domain]
-                            logger.debug(f"Found domain '{domain}' in domain_to_supplier, mapped to: {mapped_supplier}")
+                            logger.info(f"Found domain '{domain}' in domain_to_supplier, mapped to: {mapped_supplier}")
                             if domain != "opisnet.com":
                                 supplier = mapped_supplier
-                                logger.debug(f"Supplier identified from forwarded From: line for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
+                                logger.info(f"Supplier identified from forwarded From: line for UID {email.get('uid', '?')}: {email_addr}, Supplier: {supplier}")
                                 break
                             else:
-                                logger.debug(f"Forwarded From: domain {domain} is OPIS, skipping as supplier")
+                                logger.info(f"Forwarded From: domain {domain} is OPIS, skipping as supplier")
                         else:
-                            logger.debug(f"No supplier domain matched in forwarded From: line for UID {email.get('uid', '?')}: {domain}, continuing search")
+                            logger.info(f"No supplier domain matched in forwarded From: line for UID {email.get('uid', '?')}: {domain}, continuing search")
                     except Exception as e:
                         logger.warning(f"Failed to extract domain from forwarded From: line for UID {email.get('uid', '?')}: {email_addr}, error: {e}")
                 else:
-                    logger.debug(f"No email address in forwarded From: line for UID {email.get('uid', '?')}, name: {name}")
+                    logger.info(f"No email address in forwarded From: line for UID {email.get('uid', '?')}, name: {name}")
 
         if supplier is None:
             supplier = "Unknown Supplier"
@@ -599,9 +614,9 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         logger.debug(f"Supplier extraction complete, supplier: {supplier}")
 
         # Log before calling Grok API to confirm we reach this point
-        logger.debug(f"Calling Grok API for UID {email.get('uid', '?')} in process {process_id}")
+        logger.info(f"Calling Grok API for UID {email.get('uid', '?')} in process {process_id}")
         parsed = await call_grok_api(prompt_chat, content, env, session, process_id)
-        logger.debug(f"Grok API call returned for UID {email.get('uid', '?')}")
+        logger.info(f"Grok API call returned for UID {email.get('uid', '?')}")
         if parsed is None:
             logger.error("Grok API returned None")
             raise ValueError("Grok API returned None")
@@ -685,7 +700,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
     return valid_rows, skipped_rows, failed_email
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
-    logger.info(f"Parser.py version: 2025-04-29 with domain_to_supplier fix, API timeout, increased delay, and debug logging")
+    logger.info(f"Parser.py version: 2025-04-29 with domain_to_supplier fix, API timeout, increased delay, debug logging, and local logging fix")
     file_handler = setup_file_logging(process_id)
     try:
         logger.debug("Loading environment variables")
