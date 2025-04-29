@@ -396,6 +396,28 @@ def clean_email_content(content: str) -> str:
         logger.debug("Exiting clean_email_content with original content due to error")
         return content
 
+def split_content_into_chunks(content: str, max_length: int = 6000) -> List[str]:
+    """
+    Split large text content into chunks not exceeding max_length.
+    Prefers to split at line breaks to preserve structure.
+    """
+    lines = content.splitlines(keepends=True)
+    chunks = []
+    current_chunk = ""
+
+    for line in lines:
+        if len(current_chunk) + len(line) <= max_length:
+            current_chunk += line
+        else:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = line
+
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
+    return chunks
+
 # --- IMAP Functions ---
 def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
     logger.debug(f"Entering fetch_emails for process {process_id}")
@@ -538,15 +560,28 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
 
 
 # --- Processing Functions ---
-async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str,
-                                   session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
+async def process_email_with_delay(
+    email: Dict[str, str],
+    env: Dict[str, str],
+    process_id: str,
+    session: aiohttp.ClientSession
+) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
     logger.debug(f"Entering process_email_with_delay for UID {email.get('uid', '?')} in process {process_id}")
-    valid_rows, skipped_rows, failed_email = [], [], None
+
+    valid_rows = []
+    skipped_rows = []
+    failed_email = None
 
     try:
         content = clean_email_content(email.get("content", ""))
         if not content:
             raise ValueError("Empty email content")
+
+        logger.info(f"Email content length after cleaning: {len(content)} characters")
+
+        # Chunk content if needed
+        chunks = split_content_into_chunks(content, max_length=6000)
+        logger.info(f"Split content into {len(chunks)} chunks")
 
         mappings = load_mappings("mappings.xlsx")
         domain_to_supplier = {k.strip().lower(): v.strip() for k, v in mappings.get("domain_to_supplier", {}).items()}
@@ -559,11 +594,9 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
 
-        # --- SUPPLIER DETECTION ---
         email_from = email.get("from_addr", "")
         supplier = None
 
-        # Try extracting supplier from sender
         if email_from:
             email_match = re.search(r"[\w\.-]+@[\w\.-]+", email_from)
             if email_match:
@@ -571,11 +604,10 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
                 logger.info(f"Parsed domain from from_addr: {domain}")
                 supplier = domain_to_supplier.get(domain)
 
-        # Try extracting supplier from forwarded From: line if needed
         if not supplier and "From:" in content:
             forwarded_matches = re.finditer(r"From:\s*(.*?)\s*(?:<([^>]+)>|$)", content, re.IGNORECASE)
             for match in forwarded_matches:
-                name, email_addr = match.groups()
+                _, email_addr = match.groups()
                 if email_addr:
                     domain = email_addr.split("@")[-1].strip().lower()
                     logger.info(f"Parsed domain from forwarded From: {domain}")
@@ -587,26 +619,31 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             supplier = "Unknown Supplier"
             logger.warning(f"No supplier identified for UID {email.get('uid', '?')}, defaulting to Unknown Supplier")
 
-        # --- CALL GROK ---
-        logger.info(f"Calling Grok API for UID {email.get('uid', '?')}")
-        parsed = await call_grok_api(prompt_chat, content, env, session, process_id)
-        logger.info(f"Grok API call returned for UID {email.get('uid', '?')}")
+        parsed_rows = []
 
-        if parsed is None:
-            raise ValueError("Grok API returned None")
+        for idx, chunk in enumerate(chunks):
+            logger.info(f"Calling Grok API for chunk {idx+1}/{len(chunks)} for UID {email.get('uid', '?')}")
+            parsed = await call_grok_api(prompt_chat, chunk, env, session, process_id)
 
-        # Extract JSON if inside ```json ... ```
-        if parsed.startswith("```json"):
-            parsed = re.sub(r"```json|```", "", parsed, flags=re.DOTALL).strip()
+            if parsed is None:
+                logger.warning(f"Grok API returned None for chunk {idx+1} of UID {email.get('uid', '?')}")
+                continue
 
-        rows = json.loads(parsed)
+            if parsed.startswith("```json"):
+                parsed = re.sub(r"```json|```", "", parsed, flags=re.DOTALL).strip()
 
-        if not isinstance(rows, list):
-            raise ValueError("Grok response not a list")
+            try:
+                rows = json.loads(parsed)
+                if not isinstance(rows, list):
+                    raise ValueError(f"Grok response not a list for chunk {idx+1}")
+                parsed_rows.extend(rows)
+            except Exception as ex:
+                logger.error(f"Failed to parse Grok response for chunk {idx+1}: {ex}")
+                continue
 
-        logger.debug(f"Parsed {len(rows)} rows")
+        logger.info(f"Total parsed rows across all chunks: {len(parsed_rows)} for UID {email.get('uid', '?')}")
 
-        for row in rows:
+        for row in parsed_rows:
             if not isinstance(row, dict):
                 continue
             if not row.get("Product Name") or not row.get("Terminal") or not isinstance(row.get("Price"), (int, float)):
@@ -620,15 +657,11 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             if price > 5:
                 continue
 
-            # --- PATCH: Fill Supplier/Supply if missing ---
             if not is_opis:
                 if not row.get("Supplier"):
                     row["Supplier"] = supplier
                 if not row.get("Supply"):
                     row["Supply"] = supplier
-            else:
-                # For OPIS, Supplier stays blank
-                pass
 
             row = apply_mappings(row, mappings, is_opis, email_from=supplier)
 
@@ -648,13 +681,17 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             logger.info(f"Parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
 
     except Exception as ex:
-        failed_email = {"email_id": email.get("uid", "?"), "subject": email.get("subject", ""),
-                        "from_addr": email.get("from_addr", ""), "error": str(ex)}
+        failed_email = {
+            "email_id": email.get("uid", "?"),
+            "subject": email.get("subject", ""),
+            "from_addr": email.get("from_addr", ""),
+            "error": str(ex),
+        }
         logger.error(f"Failed to process email UID {email.get('uid', '?')}: {str(ex)}")
 
-    logger.debug(
-        f"Exiting process_email_with_delay with valid_rows: {len(valid_rows)}, skipped_rows: {len(skipped_rows)}, failed_email: {failed_email}")
+    logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
     return valid_rows, skipped_rows, failed_email
+
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
     logger.info(f"Parser.py version: 2025-04-29 with domain_to_supplier fix, API timeout, increased delay, debug logging, and local logging fix")
