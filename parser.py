@@ -152,13 +152,13 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             for index, row in df_suppliers.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
-                domain = row.get("Domain", None)
+                domain = str(row.get("Domain", "")).strip()  # ✅ STRIP FIXED HERE
                 logger.debug(f"Processing SupplierMappings row {index}: Raw Value={raw_value}, Standardized Value={standardized_value}, Domain={domain}")
                 if pd.isna(raw_value) or pd.isna(standardized_value):
                     logger.warning(f"Skipping invalid row in SupplierMappings: {row.to_dict()}")
                     continue
                 mappings["suppliers"][raw_value] = standardized_value
-                if domain and not pd.isna(domain):
+                if domain:
                     mappings["domain_to_supplier"][domain.lower()] = standardized_value
                     logger.debug(f"Added domain mapping: {domain.lower()} -> {standardized_value}")
             logger.debug(f"Loaded {len(mappings['suppliers'])} supplier mappings from sheet '{supplier_sheet}'")
@@ -206,7 +206,7 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
                     logger.warning(f"Skipping invalid row in ProductMappings: {row.to_dict()}")
                     continue
                 mappings["products"][raw_value] = standardized_value
-            logger.debug(f"Loaded {len(mappings['products'])} product mappings from sheet '{product_sheet}'")
+            logger.debug(f"Loaded {len(mappings['products'])} product mappings from sheet '{product_sheet}': {mappings['products']}")
         else:
             logger.warning("Product mappings sheet not found. Expected 'ProductMappings', 'Products', or 'Product Mappings'.")
 
@@ -234,7 +234,7 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
                     "standardized": standardized_value,
                     "condition": condition if pd.notna(condition) else None
                 })
-            logger.debug(f"Loaded {len(mappings['terminals'])} terminal mappings from sheet '{terminal_sheet}'")
+            logger.debug(f"Loaded {len(mappings['terminals'])} terminal mappings from sheet '{terminal_sheet}': {mappings['terminals']}")
         else:
             logger.warning("Terminal mappings sheet not found. Expected 'TerminalMappings', 'Terminals', or 'Terminal Mappings'.")
 
@@ -251,6 +251,7 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             "products": {},
             "terminals": {}
         }
+
 
 # --- Extract Position Holder from Terminal ---
 def extract_position_holder(terminal: str) -> str:
