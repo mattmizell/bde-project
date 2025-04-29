@@ -406,20 +406,22 @@ def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
         imap_server.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
         logger.debug("Selecting INBOX")
         imap_server.select("INBOX")
+
         since_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
         logger.debug(f"Searching for unseen emails since {since_date}")
         _, msg_nums = imap_server.search(None, f'(SINCE "{since_date}") UNSEEN')
         msg_nums_list = msg_nums[0].split()
-        max_emails = 3  # Limit to 3 emails to reduce runtime
-        logger.debug(f"Found {len(msg_nums_list)} unseen emails, limiting to {max_emails}")
-        for num in msg_nums_list[:max_emails]:
+        logger.info(f"Found {len(msg_nums_list)} unseen emails since {since_date}")
+
+        for num in msg_nums_list:
             logger.debug(f"Fetching email UID {num.decode()}")
             _, data = imap_server.fetch(num, "(RFC822)")
             msg = BytesParser(policy=policy.default).parsebytes(data[0][1])
             content = choose_best_content_from_email(msg)
             subject = msg.get("Subject", "").strip()
             from_addr = msg.get("From", "").strip()
-            logger.debug(f"Email UID {num.decode()}: Subject={subject}, From={from_addr}, Content length={len(content)}")
+            logger.debug(
+                f"Email UID {num.decode()}: Subject={subject}, From={from_addr}, Content length={len(content)}")
             if content:
                 emails.append({
                     "uid": num.decode(),
@@ -428,13 +430,17 @@ def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
                     "from_addr": from_addr,
                 })
                 logger.debug(f"Added email UID {num.decode()} to list")
+
         logger.debug("Logging out of IMAP server")
         imap_server.logout()
+
     except Exception as e:
         logger.error(f"Failed to fetch emails: {e}")
-    logger.debug(f"Fetched {len(emails)} emails")
+
+    logger.info(f"Fetched {len(emails)} emails for process {process_id}")
     logger.debug("Exiting fetch_emails")
     return emails
+
 
 def mark_email_as_processed(uid: str, env: Dict[str, str]) -> None:
     logger.debug(f"Entering mark_email_as_processed for UID {uid}")
