@@ -485,6 +485,7 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
             ]
         }
         logger.info(f"Preparing to make Grok API call for process {process_id}")
+
         async def make_request():
             logger.info(f"Sending POST request to {api_url}")
             async with session.post(api_url, headers=headers, json=payload, timeout=30) as response:
@@ -494,13 +495,11 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
                 logger.info(f"Grok API response received for process {process_id}")
                 return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
-        # Create a task for the API request
         request_task = asyncio.create_task(make_request())
         timeout = 35  # Total timeout in seconds
         start_time = datetime.now()
         logger.info(f"API request start time: {start_time}")
 
-        # Wait for the task with a timeout
         try:
             result = await asyncio.wait_for(request_task, timeout=timeout)
             end_time = datetime.now()
@@ -515,6 +514,9 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
             except asyncio.CancelledError:
                 logger.info("API request task was successfully cancelled")
             return None
+        except Exception as e:
+            logger.error(f"Unexpected error while waiting for Grok API: {e}")
+            return None
 
     except aiohttp.ClientTimeout:
         logger.error(f"Grok API call timed out at HTTP level after 30 seconds for process {process_id}")
@@ -522,6 +524,7 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
     except Exception as e:
         logger.error(f"Grok API call failed for process {process_id}: {e}")
         return None
+
 
 # --- Processing Functions ---
 async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str,
