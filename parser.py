@@ -42,10 +42,17 @@ logger.handlers = []
 
 # Add a console handler for Render logs
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
+console_handler.setLevel(logging.DEBUG)  # Output DEBUG level logs
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
+
+# Prevent propagation to root logger to avoid duplicate logs
+logger.propagate = False
+
+# Set other loggers to INFO level to reduce noise
+logging.getLogger("aiohttp").setLevel(logging.INFO)
+logging.getLogger("asyncio").setLevel(logging.INFO)
 
 # Output, Prompts, and State directories
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -251,7 +258,7 @@ def extract_position_holder(terminal: str) -> str:
             return standardized_value
     logger.debug("No position holder found, returning empty string")
     logger.debug("Exiting extract_position_holder")
-    return ""  # Return empty string if no position holder is found
+    return ""
 
 # --- Apply Mappings to Rows ---
 def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_from: str) -> Dict:
@@ -461,7 +468,7 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
                 {"role": "user", "content": content},
             ]
         }
-        logger.debug(f"Making Grok API call for process {process_id} with payload: {payload}")
+        logger.debug(f"Preparing to make Grok API call for process {process_id} with payload: {payload}")
         async def make_request():
             logger.debug(f"Sending POST request to {api_url}")
             async with session.post(api_url, headers=headers, json=payload, timeout=30) as response:
@@ -472,8 +479,12 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
                 return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
         try:
-            logger.debug("Waiting for API response with asyncio.wait_for")
+            logger.debug("Starting API request with asyncio.wait_for")
+            start_time = datetime.now()
+            logger.debug(f"API request start time: {start_time}")
             result = await asyncio.wait_for(make_request(), timeout=35)
+            end_time = datetime.now()
+            logger.debug(f"API request end time: {end_time}, duration: {(end_time - start_time).total_seconds()} seconds")
             logger.debug(f"API call completed successfully, result: {result}")
             logger.debug("Exiting call_grok_api with result")
             return result
@@ -528,18 +539,16 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         email_from = email.get("from_addr", "")
         supplier = None
         domain_to_supplier = mappings["domain_to_supplier"]
-        logger.debug(f"Starting supplier extraction for UID {email.get('uid', '?')}, from_addr: {email_from}")
+        logger.debug(f"Starting supplier extraction for UID {email.get('uid', '?')}, from_addr: {email_from!r}")
 
-        if '@' in email_from:
-            # Handle cases like "Name <email@domain.com>" or "email@domain.com"
-            email_addr = email_from.split('<')[-1].strip('>').lower()
-            logger.debug(f"Extracted email address: {email_addr}")
-            try:
-                domain_parts = email_addr.split('@')
-                if len(domain_parts) != 2:
-                    logger.warning(f"Invalid email address format in from_addr for UID {email.get('uid', '?')}: {email_addr}")
-                else:
-                    domain = domain_parts[-1]  # Get the part after '@'
+        if email_from:
+            # Handle various email formats: "email@domain.com", "Name <email@domain.com>", or malformed
+            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', email_from)
+            if email_match:
+                email_addr = email_match.group(0).lower()
+                logger.debug(f"Extracted email address: {email_addr}")
+                try:
+                    domain = email_addr.split('@')[-1]
                     logger.debug(f"Extracted domain: {domain}")
                     if domain in domain_to_supplier:
                         mapped_supplier = domain_to_supplier[domain]
@@ -551,8 +560,10 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
                             logger.debug(f"Domain {domain} identified as OPIS, supplier will be blank")
                     else:
                         logger.debug(f"No supplier domain matched in from_addr for UID {email.get('uid', '?')}: {domain}, will check forwarded From: line")
-            except Exception as e:
-                logger.warning(f"Failed to extract domain from from_addr for UID {email.get('uid', '?')}: {email_addr}, error: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to extract domain from from_addr for UID {email.get('uid', '?')}: {email_addr}, error: {e}")
+            else:
+                logger.warning(f"No valid email address found in from_addr for UID {email.get('uid', '?')}: {email_from!r}")
 
         if supplier is None and "From:" in content:
             logger.debug("Checking for forwarded From: line in content")
