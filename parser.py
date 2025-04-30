@@ -168,7 +168,8 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
 
         # Load SupplyMappings
         supply_sheet = None
-        for sheet_name in ["SupplyMappings", "Supply", "Supply Mappings"]:
+        for sheet_name in ["SupplyMappings", "Supply", "Supply Mappings", "SupplyLookupMappings"]:
+            logger.debug(f"Loaded {len(mappings['position_holders'])} position holder mappings from sheet '{supply_sheet}': {mappings['position_holders']}")
             if sheet_name in xl.sheet_names:
                 supply_sheet = sheet_name
                 break
@@ -254,21 +255,34 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
 
 
 # --- Extract Position Holder from Terminal ---
-def extract_position_holder(terminal: str) -> str:
+def extract_position_holder(terminal: str, position_holders: Dict[str, str]) -> str:
+    """
+    Extract the standardized supply name from a terminal string using position holder mappings.
+
+    Args:
+        terminal (str): The terminal name to search within.
+        position_holders (Dict[str, str]): A dictionary of prefix -> standardized supply name.
+
+    Returns:
+        str: The standardized supply name if a match is found, otherwise an empty string.
+    """
     logger.debug(f"Entering extract_position_holder with terminal: {terminal}")
-    mappings = load_mappings("mappings.xlsx")
-    position_holders = mappings["position_holders"]
-    terminal_lower = terminal.lower()
-    logger.debug(f"Terminal (lowercase): {terminal_lower}, position_holders mappings: {position_holders}")
-    for raw_value, standardized_value in position_holders.items():
-        logger.debug(f"Checking if raw_value '{raw_value}' (lowercase: '{raw_value.lower()}') is in terminal '{terminal_lower}'")
-        if raw_value.lower() in terminal_lower:
-            logger.debug(f"Found match: raw_value '{raw_value}' maps to standardized_value '{standardized_value}'")
-            logger.debug(f"Exiting extract_position_holder with result: {standardized_value}")
-            return standardized_value
-    logger.debug("No position holder found, returning empty string")
-    logger.debug("Exiting extract_position_holder")
+    terminal_upper = terminal.upper()
+
+    for prefix, supply in position_holders.items():
+        prefix_upper = prefix.upper()
+        if terminal_upper.startswith(prefix_upper):
+            logger.debug(f"Matched start of terminal: '{prefix_upper}' -> '{supply}'")
+            return supply
+        # Match prefix between delimiters (e.g., "-FH-MG-", "/FH-MG/", "@FH-MG@", etc.)
+        pattern = rf"[\-\/\s@]{re.escape(prefix_upper)}[\-\/\s@]"
+        if re.search(pattern, terminal_upper):
+            logger.debug(f"Matched embedded supply prefix with pattern '{pattern}' -> '{supply}'")
+            return supply
+
+    logger.debug("No position holder match found, returning empty string")
     return ""
+
 
 # --- Apply Mappings to Rows ---
 def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_from: str) -> Dict:
@@ -285,7 +299,7 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
     # Supply: Extract position holder from terminal using the SupplyMappings tab
     terminal = row.get("Terminal", "")
     logger.debug(f"Extracting position holder for terminal: {terminal}")
-    supply = extract_position_holder(terminal)
+    supply = extract_position_holder(terminal, mappings["position_holders"])
     row["Supply"] = supply
     logger.debug(f"Set Supply to: {supply}")
 
@@ -512,52 +526,46 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
             ]
         }
 
+        # ✅ Logging details before the call
         logger.info(f"Prompt loaded (first 200 chars): {prompt[:200].replace(chr(10), ' ')}")
         logger.info(f"Content to parse (first 200 chars): {content[:200].replace(chr(10), ' ')}")
+        logger.debug(f"Full prompt:\n{prompt}")
+        logger.debug(f"Full content:\n{content}")
         logger.debug(f"API payload:\n{json.dumps(payload, indent=2)}")
 
         async def make_request():
             logger.info(f"Sending POST request to {api_url}")
-            async with session.post(api_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=90)) as response:
+            async with session.post(api_url, headers=headers, json=payload, timeout=90) as response:
                 logger.info(f"Response status: {response.status}")
                 response.raise_for_status()
                 data = await response.json()
                 logger.info(f"Grok API response received for process {process_id}")
                 return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
-        request_task = asyncio.create_task(make_request())
-        timeout = 90  # seconds
+        timeout = 95  # Increased coroutine timeout
         start_time = datetime.now()
         logger.info(f"API request start time: {start_time}")
 
         try:
-            result = await asyncio.wait_for(request_task, timeout=timeout)
+            result = await asyncio.wait_for(make_request(), timeout=timeout)
             end_time = datetime.now()
             logger.info(f"API request end time: {end_time}, duration: {(end_time - start_time).total_seconds()} seconds")
             logger.info(f"API call completed successfully, result: {result[:200]}...")
             return result
-
         except asyncio.TimeoutError:
-            logger.error(f"Grok API call timed out after {timeout} seconds for process {process_id}. Retrying once...")
-            request_task.cancel()
-            try:
-                await request_task
-            except asyncio.CancelledError:
-                logger.info("First API request task was successfully cancelled")
+            logger.error(f"Grok API call timed out at coroutine level after {timeout} seconds for process {process_id}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error while waiting for Grok API: {e}")
+            return None
 
-            # Retry once
-            try:
-                retry_task = asyncio.create_task(make_request())
-                result = await asyncio.wait_for(retry_task, timeout=timeout)
-                logger.info(f"Retry successful for process {process_id}")
-                return result
-            except Exception as e:
-                logger.error(f"Retry also failed for process {process_id}: {e}")
-                return None
-
+    except aiohttp.ClientTimeout:
+        logger.error(f"Grok API call timed out at HTTP level after 90 seconds for process {process_id}")
+        return None
     except Exception as e:
         logger.error(f"Grok API call failed for process {process_id}: {e}")
         return None
+
 
 
 # --- Processing Functions ---
