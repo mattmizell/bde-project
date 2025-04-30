@@ -144,7 +144,7 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             "position_holders": {},
             "products": {},
             "terminals": {},
-            "supply_lookup": {}  # ✅ New key added
+            "supply_lookup": {}
         }
         logger.debug(f"Excel file loaded, available sheets: {xl.sheet_names}")
 
@@ -248,18 +248,25 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             logger.debug(f"Loading SupplyLookupMappings from sheet: {supply_lookup_sheet}")
             df_lookup = xl.parse(supply_lookup_sheet)
             for index, row in df_lookup.iterrows():
-                prefix = str(row.get("Prefix", "")).strip()
-                supply = str(row.get("Supply", "")).strip()
-                if prefix and supply and pd.notna(prefix) and pd.notna(supply):
-                    mappings["supply_lookup"][prefix] = supply
+                raw_prefix = row.get("Prefix")
+                raw_supply = row.get("Supply")
+
+                if pd.notna(raw_prefix) and pd.notna(raw_supply):
+                    prefix = str(raw_prefix).strip()
+                    supply = str(raw_supply).strip()
+                    if prefix and supply:
+                        mappings["supply_lookup"][prefix] = supply
+                    else:
+                        logger.warning(f"⚠️ Empty after strip in SupplyLookupMappings: {row.to_dict()}")
                 else:
-                    logger.warning(f"Skipping incomplete row in SupplyLookupMappings: {row.to_dict()}")
+                    logger.warning(f"⚠️ Skipping row with NaN in SupplyLookupMappings: {row.to_dict()}")
             logger.info(f"Loaded {len(mappings['supply_lookup'])} supply prefix mappings")
         else:
             logger.warning("SupplyLookupMappings sheet not found.")
 
         logger.debug("Exiting load_mappings")
         return mappings
+
     except Exception as e:
         logger.error(f"Failed to load mappings from {file_path}: {e}")
         return {
@@ -270,6 +277,7 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             "terminals": {},
             "supply_lookup": {}
         }
+
 
 
 # --- Resolve Supply (NEW FUNCTION) ---
