@@ -255,34 +255,47 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
 
 
 # --- Extract Position Holder from Terminal ---
-def extract_position_holder(terminal: str, position_holders: Dict[str, str]) -> str:
-    """
-    Extracts a standardized supply name from a terminal string using prefix-based matching.
+def extract_position_holder(terminal: str, supply_mappings: Dict[str, str]) -> str:
+    logger.debug(f"🔍 extract_position_holder(): Raw terminal input: '{terminal}'")
 
-    Args:
-        terminal (str): The terminal name (e.g., 'FH-MG-KANSAS CITY-KS').
-        position_holders (Dict[str, str]): Mapping of prefixes to supply names.
+    if not terminal:
+        logger.warning("⚠️ extract_position_holder(): Terminal is empty, returning 'Unknown Supply'")
+        return "Unknown Supply"
 
-    Returns:
-        str: Matched supply name or empty string.
-    """
-    logger.debug(f"Entering extract_position_holder with terminal: {terminal}")
-    terminal_upper = terminal.upper()
+    normalized = terminal.strip().upper().replace("(", "").replace(")", "")
+    logger.debug(f"📎 Normalized terminal: '{normalized}'")
 
-    for prefix, supply in position_holders.items():
-        prefix_upper = prefix.upper()
-        if terminal_upper.startswith(prefix_upper):
-            logger.debug(f"Matched start of terminal: '{prefix_upper}' -> '{supply}'")
-            return supply
+    # Try full match first
+    if normalized in supply_mappings:
+        logger.info(f"✅ Full match found for terminal '{normalized}' -> '{supply_mappings[normalized]}'")
+        return supply_mappings[normalized]
 
-        # Match embedded pattern (e.g., "-VL-MG-", "/VL-MG/", etc.)
-        pattern = rf"[\-\/\s@]{re.escape(prefix_upper)}[\-\/\s@]"
-        if re.search(pattern, terminal_upper):
-            logger.debug(f"Matched embedded prefix with pattern '{pattern}' -> '{supply}'")
-            return supply
+    # Try split-based prefix matching
+    tokens = [token.strip() for token in re.split(r"[,\-/]+", normalized) if token.strip()]
+    logger.debug(f"🔧 Tokenized terminal: {tokens}")
 
-    logger.warning(f"No supply match found for terminal: {terminal}")
-    return ""
+    for token in tokens:
+        if token in supply_mappings:
+            logger.info(f"✅ Prefix match: token '{token}' -> '{supply_mappings[token]}'")
+            return supply_mappings[token]
+
+    # Try joined prefixes (like GMK-MG)
+    for i in range(len(tokens)):
+        for j in range(i + 1, len(tokens) + 1):
+            joined = "-".join(tokens[i:j])
+            if joined in supply_mappings:
+                logger.info(f"✅ Multi-token match: '{joined}' -> '{supply_mappings[joined]}'")
+                return supply_mappings[joined]
+
+    # Final fallback: look for known values inside the terminal
+    for key in supply_mappings:
+        if key in normalized:
+            logger.info(f"⚠️ Fuzzy fallback match for '{key}' in '{normalized}' -> '{supply_mappings[key]}'")
+            return supply_mappings[key]
+
+    logger.warning(f"❌ No supply match found for terminal: '{terminal}', returning 'Unknown Supply'")
+    return "Unknown Supply"
+
 
 
 
