@@ -278,7 +278,23 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             "supply_lookup": {}
         }
 
+# --- Prompt Helpers ---
+def supply_examples_prompt_block(position_holders: Dict[str, str]) -> str:
+    """
+    Converts SupplyMappings (position_holders) into prompt-friendly examples
+    to help Grok infer the correct Supply from raw terminal strings.
+    """
+    if not position_holders:
+        return ""
 
+    examples = []
+    for raw_value, standardized_value in position_holders.items():
+        examples.append(
+            f"Example:\nRaw Terminal: {raw_value}\nResolved Position Holder (Supply): {standardized_value}"
+        )
+
+    block = "\n\n### SUPPLY RESOLUTION EXAMPLES\n\n" + "\n\n".join(examples)
+    return block
 
 # --- Resolve Supply (NEW FUNCTION) ---
 def resolve_supply(terminal: str, supply_mappings: dict, fuzzy_threshold: int = 80) -> str:
@@ -666,6 +682,11 @@ async def process_email_with_delay(
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
 
+        # 🧠 Append examples for Grok to improve Supply extraction (only for non-OPIS)
+        if not is_opis:
+            example_block = supply_examples_prompt_block(mappings.get("position_holders", {}))
+            prompt_chat += "\n\n" + example_block
+
         email_from = email.get("from_addr", "")
         supplier = None
 
@@ -763,6 +784,7 @@ async def process_email_with_delay(
 
     logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
     return valid_rows, skipped_rows, failed_email
+
 
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
