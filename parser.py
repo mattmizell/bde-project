@@ -3,7 +3,6 @@ import re
 import imaplib
 import aiohttp
 import asyncio
-import logging
 import pandas as pd
 import json
 import csv
@@ -13,6 +12,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from email import policy
 from email.parser import BytesParser
+from rapidfuzz import fuzz
+import logging
+
 
 # --- Config ---
 BASE_DIR: Path = Path(__file__).parent
@@ -136,7 +138,14 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
     logger.debug(f"Entering load_mappings with file_path: {file_path}")
     try:
         xl = pd.ExcelFile(file_path)
-        mappings = {"suppliers": {}, "domain_to_supplier": {}, "position_holders": {}, "products": {}, "terminals": {}}
+        mappings = {
+            "suppliers": {},
+            "domain_to_supplier": {},
+            "position_holders": {},
+            "products": {},
+            "terminals": {},
+            "supply_lookup": {}  # ✅ New key added
+        }
         logger.debug(f"Excel file loaded, available sheets: {xl.sheet_names}")
 
         # Load SupplierMappings
@@ -152,42 +161,36 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             for index, row in df_suppliers.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
-                domain = str(row.get("Domain", "")).strip()  # ✅ STRIP FIXED HERE
-                logger.debug(f"Processing SupplierMappings row {index}: Raw Value={raw_value}, Standardized Value={standardized_value}, Domain={domain}")
+                domain = str(row.get("Domain", "")).strip()
                 if pd.isna(raw_value) or pd.isna(standardized_value):
                     logger.warning(f"Skipping invalid row in SupplierMappings: {row.to_dict()}")
                     continue
                 mappings["suppliers"][raw_value] = standardized_value
                 if domain:
                     mappings["domain_to_supplier"][domain.lower()] = standardized_value
-                    logger.debug(f"Added domain mapping: {domain.lower()} -> {standardized_value}")
-            logger.debug(f"Loaded {len(mappings['suppliers'])} supplier mappings from sheet '{supplier_sheet}'")
-            logger.debug(f"Loaded {len(mappings['domain_to_supplier'])} domain-to-supplier mappings: {mappings['domain_to_supplier']}")
+            logger.debug(f"Loaded {len(mappings['suppliers'])} suppliers, {len(mappings['domain_to_supplier'])} domain mappings")
         else:
-            logger.warning("Supplier mappings sheet not found. Expected 'SupplierMappings', 'Suppliers', or 'Supplier Mappings'.")
+            logger.warning("Supplier mappings sheet not found.")
 
         # Load SupplyMappings
         supply_sheet = None
-        for sheet_name in ["SupplyMappings", "Supply", "Supply Mappings", "SupplyLookupMappings"]:
-            logger.debug(f"Loaded {len(mappings['position_holders'])} position holder mappings from sheet '{supply_sheet}': {mappings['position_holders']}")
+        for sheet_name in ["SupplyMappings", "Supply", "Supply Mappings"]:
             if sheet_name in xl.sheet_names:
                 supply_sheet = sheet_name
                 break
         if supply_sheet:
             logger.debug(f"Loading SupplyMappings from sheet: {supply_sheet}")
             df_supply = xl.parse(supply_sheet)
-            logger.debug(f"SupplyMappings dataframe loaded with shape: {df_supply.shape}")
             for index, row in df_supply.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
-                logger.debug(f"Processing SupplyMappings row {index}: Raw Value={raw_value}, Standardized Value={standardized_value}")
                 if pd.isna(raw_value) or pd.isna(standardized_value):
                     logger.warning(f"Skipping invalid row in SupplyMappings: {row.to_dict()}")
                     continue
                 mappings["position_holders"][raw_value] = standardized_value
-            logger.debug(f"Loaded {len(mappings['position_holders'])} position holder mappings from sheet '{supply_sheet}': {mappings['position_holders']}")
+            logger.debug(f"Loaded {len(mappings['position_holders'])} position holder mappings")
         else:
-            logger.warning("Supply mappings sheet not found. Expected 'SupplyMappings', 'Supply', or 'Supply Mappings'.")
+            logger.warning("Supply mappings sheet not found.")
 
         # Load ProductMappings
         product_sheet = None
@@ -198,18 +201,16 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
         if product_sheet:
             logger.debug(f"Loading ProductMappings from sheet: {product_sheet}")
             df_products = xl.parse(product_sheet)
-            logger.debug(f"ProductMappings dataframe loaded with shape: {df_products.shape}")
             for index, row in df_products.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
-                logger.debug(f"Processing ProductMappings row {index}: Raw Value={raw_value}, Standardized Value={standardized_value}")
                 if pd.isna(raw_value) or pd.isna(standardized_value):
                     logger.warning(f"Skipping invalid row in ProductMappings: {row.to_dict()}")
                     continue
                 mappings["products"][raw_value] = standardized_value
-            logger.debug(f"Loaded {len(mappings['products'])} product mappings from sheet '{product_sheet}': {mappings['products']}")
+            logger.debug(f"Loaded {len(mappings['products'])} product mappings")
         else:
-            logger.warning("Product mappings sheet not found. Expected 'ProductMappings', 'Products', or 'Product Mappings'.")
+            logger.warning("Product mappings sheet not found.")
 
         # Load TerminalMappings
         terminal_sheet = None
@@ -220,12 +221,10 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
         if terminal_sheet:
             logger.debug(f"Loading TerminalMappings from sheet: {terminal_sheet}")
             df_terminals = xl.parse(terminal_sheet)
-            logger.debug(f"TerminalMappings dataframe loaded with shape: {df_terminals.shape}")
             for index, row in df_terminals.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
                 condition = row.get("Condition", None)
-                logger.debug(f"Processing TerminalMappings row {index}: Raw Value={raw_value}, Standardized Value={standardized_value}, Condition={condition}")
                 if pd.isna(raw_value) or pd.isna(standardized_value):
                     logger.warning(f"Skipping invalid row in TerminalMappings: {row.to_dict()}")
                     continue
@@ -235,106 +234,146 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
                     "standardized": standardized_value,
                     "condition": condition if pd.notna(condition) else None
                 })
-            logger.debug(f"Loaded {len(mappings['terminals'])} terminal mappings from sheet '{terminal_sheet}': {mappings['terminals']}")
+            logger.debug(f"Loaded {len(mappings['terminals'])} terminal mappings")
         else:
-            logger.warning("Terminal mappings sheet not found. Expected 'TerminalMappings', 'Terminals', or 'Terminal Mappings'.")
+            logger.warning("Terminal mappings sheet not found.")
 
-        logger.debug(f"Total mappings loaded: Suppliers={len(mappings['suppliers'])}, Domains={len(mappings['domain_to_supplier'])}, Position Holders={len(mappings['position_holders'])}, Products={len(mappings['products'])}, Terminals={len(mappings['terminals'])}")
+        # ✅ Load SupplyLookupMappings
+        supply_lookup_sheet = None
+        for sheet_name in ["SupplyLookupMappings", "Supply Prefixes", "Supply Lookup"]:
+            if sheet_name in xl.sheet_names:
+                supply_lookup_sheet = sheet_name
+                break
+        if supply_lookup_sheet:
+            logger.debug(f"Loading SupplyLookupMappings from sheet: {supply_lookup_sheet}")
+            df_lookup = xl.parse(supply_lookup_sheet)
+            for index, row in df_lookup.iterrows():
+                prefix = str(row.get("Prefix", "")).strip()
+                supply = str(row.get("Supply", "")).strip()
+                if prefix and supply and pd.notna(prefix) and pd.notna(supply):
+                    mappings["supply_lookup"][prefix] = supply
+                else:
+                    logger.warning(f"Skipping incomplete row in SupplyLookupMappings: {row.to_dict()}")
+            logger.info(f"Loaded {len(mappings['supply_lookup'])} supply prefix mappings")
+        else:
+            logger.warning("SupplyLookupMappings sheet not found.")
+
         logger.debug("Exiting load_mappings")
         return mappings
     except Exception as e:
         logger.error(f"Failed to load mappings from {file_path}: {e}")
-        logger.debug("Exiting load_mappings with empty mappings due to error")
         return {
             "suppliers": {},
             "domain_to_supplier": {},
             "position_holders": {},
             "products": {},
-            "terminals": {}
+            "terminals": {},
+            "supply_lookup": {}
         }
 
 
-# --- Extract Position Holder from Terminal ---
-def extract_position_holder(terminal: str, supply_mappings: Dict[str, str]) -> str:
-    logger.debug(f"🔍 extract_position_holder(): Raw terminal input: '{terminal}'")
+# --- Resolve Supply (NEW FUNCTION) ---
+def resolve_supply(terminal: str, supply_mappings: dict, fuzzy_threshold: int = 80) -> str:
+    """
+    Attempts to resolve a standardized supply name from a given terminal string.
+    - First uses deterministic prefix matching from supply_mappings.
+    - Then uses fuzzy string matching (via rapidfuzz) if no prefix matches.
+    Returns "Unknown Supply" if no reliable match is found.
+    """
+    logger.debug(f"🔍 Resolving supply for terminal: '{terminal}'")
 
-    if not terminal:
-        logger.warning("⚠️ extract_position_holder(): Terminal is empty, returning 'Unknown Supply'")
+    if not terminal or not isinstance(terminal, str):
+        logger.warning("⚠️ Terminal is missing or invalid; returning Unknown Supply")
         return "Unknown Supply"
 
-    normalized = terminal.strip().upper().replace("(", "").replace(")", "")
-    logger.debug(f"📎 Normalized terminal: '{normalized}'")
+    terminal = terminal.strip()
 
-    # Try full match first
-    if normalized in supply_mappings:
-        logger.info(f"✅ Full match found for terminal '{normalized}' -> '{supply_mappings[normalized]}'")
-        return supply_mappings[normalized]
+    # --- Deterministic Prefix Match ---
+    for prefix, supply in supply_mappings.items():
+        if terminal.startswith(prefix):
+            logger.info(f"✅ Prefix match: terminal '{terminal}' starts with '{prefix}' → '{supply}'")
+            return supply
 
-    # Try split-based prefix matching
-    tokens = [token.strip() for token in re.split(r"[,\-/]+", normalized) if token.strip()]
-    logger.debug(f"🔧 Tokenized terminal: {tokens}")
+    # --- Fuzzy Matching Fallback ---
+    best_score = 0
+    best_match = None
+    for prefix, supply in supply_mappings.items():
+        score = fuzz.partial_ratio(prefix.lower(), terminal.lower())
+        logger.debug(f"🤖 Fuzzy comparing '{prefix}' with '{terminal}' → score: {score}")
+        if score > best_score:
+            best_score = score
+            best_match = supply
 
-    for token in tokens:
-        if token in supply_mappings:
-            logger.info(f"✅ Prefix match: token '{token}' -> '{supply_mappings[token]}'")
-            return supply_mappings[token]
-
-    # Try joined prefixes (like GMK-MG)
-    for i in range(len(tokens)):
-        for j in range(i + 1, len(tokens) + 1):
-            joined = "-".join(tokens[i:j])
-            if joined in supply_mappings:
-                logger.info(f"✅ Multi-token match: '{joined}' -> '{supply_mappings[joined]}'")
-                return supply_mappings[joined]
-
-    # Final fallback: look for known values inside the terminal
-    for key in supply_mappings:
-        if key in normalized:
-            logger.info(f"⚠️ Fuzzy fallback match for '{key}' in '{normalized}' -> '{supply_mappings[key]}'")
-            return supply_mappings[key]
-
-    logger.warning(f"❌ No supply match found for terminal: '{terminal}', returning 'Unknown Supply'")
-    return "Unknown Supply"
-
-
+    if best_score >= fuzzy_threshold:
+        logger.info(f"🧠 Fuzzy match accepted: '{terminal}' → '{best_match}' (score: {best_score})")
+        return best_match
+    else:
+        logger.warning(f"❌ No supply match found for terminal: '{terminal}', returning 'Unknown Supply'")
+        return "Unknown Supply"
 
 
 
 # --- Apply Mappings to Rows ---
 def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_from: str) -> Dict:
     logger.debug(f"Entering apply_mappings with row: {row}, is_opis: {is_opis}, email_from: {email_from}")
+
+    # --- Supplier ---
     supplier = row.get("Supplier", "")
-    logger.debug(f"Initial Supplier: {supplier}")
-
-    # For OPIS emails, supplier should remain blank unless explicitly set in the parsed data
     if not is_opis and supplier in mappings["suppliers"]:
-        logger.debug(f"Mapping supplier '{supplier}' to standardized value")
         row["Supplier"] = mappings["suppliers"][supplier]
-        logger.debug(f"Translated Supplier: {supplier} -> {row['Supplier']}")
+        logger.debug(f"Mapped Supplier: {supplier} → {row['Supplier']}")
 
-    # Supply: Extract position holder from terminal using the SupplyMappings tab
+    # --- Supply ---
     terminal = row.get("Terminal", "")
-    logger.debug(f"Extracting position holder for terminal: {terminal}")
-    supply = extract_position_holder(terminal, mappings["position_holders"])
-    row["Supply"] = supply
-    logger.debug(f"Set Supply to: {supply}")
+    supply = row.get("Supply", "").strip()
 
-    # Product mappings
+    if not supply or supply.lower() == "unknown supply":
+        # First try fuzzy/position_holder match
+        supply = resolve_supply(terminal, mappings.get("position_holders", {}))
+        logger.debug(f"resolve_supply fallback returned: {supply}")
+
+        # Then token-based prefix fallback (e.g., FH-MG-KANSAS CITY → FH)
+        if not supply or supply.lower() == "unknown supply":
+            prefix_token = terminal.split("-")[0].strip().upper()
+            supply_from_lookup = mappings.get("supply_lookup", {}).get(prefix_token)
+            if supply_from_lookup:
+                supply = supply_from_lookup
+                logger.info(f"✅ Overriding missing/unknown supply using prefix '{prefix_token}': {supply_from_lookup}")
+            else:
+                logger.warning(f"❌ No supply match found for terminal prefix: '{prefix_token}', keeping supply")
+
+    row["Supply"] = supply
+
+    # --- Product ---
     product = row.get("Product Name", "")
-    logger.debug(f"Processing Product Name: {product}")
     product_key = product.replace("Gross ", "") if product.startswith("Gross ") else product
-    logger.debug(f"Product key after removing 'Gross ': {product_key}")
     if product_key in mappings["products"]:
-        logger.debug(f"Mapping product '{product_key}' to standardized value")
         row["Product Name"] = mappings["products"][product_key]
-        logger.debug(f"Translated Product: {product} -> {row['Product Name']}")
     else:
         product_key = product_key.replace("Wholesale ", "")
-        logger.debug(f"Product key after removing 'Wholesale ': {product_key}")
         if product_key in mappings["products"]:
-            logger.debug(f"Mapping product '{product_key}' to standardized value")
             row["Product Name"] = mappings["products"][product_key]
-            logger.debug(f"Translated Product: {product} -> {row['Product Name']}")
+
+    # --- Terminal ---
+    terminal_map = mappings.get("terminals", {}).get(terminal, [])
+    supplier = row.get("Supplier", "")
+    for mapping in terminal_map:
+        condition = mapping.get("condition")
+        if condition is None:
+            row["Terminal"] = mapping["standardized"]
+            break
+        elif condition == 'Supplier in ["Phillips 66", "Cenex"]' and supplier in ["Phillips 66", "Cenex"]:
+            row["Terminal"] = mapping["standardized"]
+            break
+        elif condition == 'Supplier not in ["Phillips 66", "Cenex"]' and supplier not in ["Phillips 66", "Cenex"]:
+            row["Terminal"] = mapping["standardized"]
+            break
+
+    logger.debug(f"Final row after mappings: {row}")
+    logger.debug("Exiting apply_mappings")
+    return row
+
+
 
     # Terminal mappings
     supplier = row.get("Supplier", "")
