@@ -257,25 +257,33 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
 # --- Extract Position Holder from Terminal ---
 def extract_position_holder(terminal: str, position_holders: Dict[str, str]) -> str:
     """
-    Extract the standardized supply name from a terminal string using known prefix mappings.
-    - Matches on full prefix at the start
-    - Matches on token-separated values (e.g., '/', '-', ' ')
-    Logs missed terminals for analysis.
+    Extracts a standardized supply name from a terminal string using prefix-based matching.
+
+    Args:
+        terminal (str): The terminal name (e.g., 'FH-MG-KANSAS CITY-KS').
+        position_holders (Dict[str, str]): Mapping of prefixes to supply names.
+
+    Returns:
+        str: Matched supply name or empty string.
     """
+    logger.debug(f"Entering extract_position_holder with terminal: {terminal}")
     terminal_upper = terminal.upper()
-    tokens = re.split(r"[\s\-/@]", terminal_upper)
 
     for prefix, supply in position_holders.items():
         prefix_upper = prefix.upper()
         if terminal_upper.startswith(prefix_upper):
-            logger.debug(f"Matched supply (start match): {prefix_upper} -> {supply}")
-            return supply
-        if prefix_upper in tokens:
-            logger.debug(f"Matched supply (token match): {prefix_upper} -> {supply}")
+            logger.debug(f"Matched start of terminal: '{prefix_upper}' -> '{supply}'")
             return supply
 
-    logger.warning(f"No Supply match found for terminal: '{terminal}'")
+        # Match embedded pattern (e.g., "-VL-MG-", "/VL-MG/", etc.)
+        pattern = rf"[\-\/\s@]{re.escape(prefix_upper)}[\-\/\s@]"
+        if re.search(pattern, terminal_upper):
+            logger.debug(f"Matched embedded prefix with pattern '{pattern}' -> '{supply}'")
+            return supply
+
+    logger.warning(f"No supply match found for terminal: {terminal}")
     return ""
+
 
 
 
