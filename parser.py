@@ -296,6 +296,43 @@ def supply_examples_prompt_block(position_holders: Dict[str, str]) -> str:
     block = "\n\n### SUPPLY RESOLUTION EXAMPLES\n\n" + "\n\n".join(examples)
     return block
 
+def supply_lookup_prompt_block(supply_lookup: Dict[str, str]) -> str:
+    """
+    Converts SupplyLookupMappings into a prompt-friendly block to help Grok infer Supply from terminal prefixes.
+    Example: FH-MG → Flint Hills
+    """
+    if not supply_lookup:
+        return ""
+
+    examples = [
+        f"Prefix: {prefix} → Supply: {supply}"
+        for prefix, supply in supply_lookup.items()
+    ]
+
+    block = "\n\n### SUPPLY LOOKUP PREFIX EXAMPLES\n\n" + "\n".join(examples)
+    return block
+
+def terminal_mapping_prompt_block(terminal_mappings: Dict[str, List[Dict]]) -> str:
+    """
+    Converts TerminalMappings into a readable format for prompt injection.
+    Example: Raw → Standardized (with condition, if any)
+    """
+    if not terminal_mappings:
+        return ""
+
+    lines = []
+    for raw, entries in terminal_mappings.items():
+        for entry in entries:
+            standardized = entry.get("standardized", "")
+            condition = entry.get("condition", "")
+            if condition:
+                lines.append(f"Raw Terminal: {raw} → Standardized: {standardized} (Condition: {condition})")
+            else:
+                lines.append(f"Raw Terminal: {raw} → Standardized: {standardized}")
+
+    block = "\n\n### TERMINAL MAPPING EXAMPLES\n\n" + "\n".join(lines)
+    return block
+
 # --- Resolve Supply (NEW FUNCTION) ---
 def resolve_supply(terminal: str, supply_mappings: dict, fuzzy_threshold: int = 80) -> str:
     """
@@ -654,6 +691,7 @@ async def process_email_with_delay(
     process_id: str,
     session: aiohttp.ClientSession
 ) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
+
     logger.debug(f"Entering process_email_with_delay for UID {email.get('uid', '?')} in process {process_id}")
 
     valid_rows = []
@@ -666,8 +704,6 @@ async def process_email_with_delay(
             raise ValueError("Empty email content")
 
         logger.info(f"Email content length after cleaning: {len(content)} characters")
-
-        # Chunk content if needed
         chunks = split_content_into_chunks(content, max_length=6000)
         logger.info(f"Split content into {len(chunks)} chunks")
 
@@ -682,18 +718,18 @@ async def process_email_with_delay(
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
 
-        # 🧠 Append examples for Grok to improve Supply extraction (only for non-OPIS)
+        # 🧠 Dynamically append prompt examples (non-OPIS only)
         if not is_opis:
-            example_block = supply_examples_prompt_block(mappings.get("position_holders", {}))
-            prompt_chat += "\n\n" + example_block
+            prompt_chat += "\n\n" + supply_examples_prompt_block(mappings.get("position_holders", {}))
+            prompt_chat += "\n\n" + supply_lookup_prompt_block(mappings.get("supply_lookup", {}))
+            prompt_chat += "\n\n" + terminal_mapping_prompt_block(mappings.get("terminals", {}))
 
         email_from = email.get("from_addr", "")
         supplier = None
-
         if email_from:
-            email_match = re.search(r"[\w\.-]+@[\w\.-]+", email_from)
-            if email_match:
-                domain = email_match.group(0).split("@")[-1].strip().lower()
+            match = re.search(r"[\w\.-]+@[\w\.-]+", email_from)
+            if match:
+                domain = match.group(0).split("@")[-1].strip().lower()
                 logger.info(f"Parsed domain from from_addr: {domain}")
                 supplier = domain_to_supplier.get(domain)
 
@@ -713,7 +749,6 @@ async def process_email_with_delay(
             logger.warning(f"No supplier identified for UID {email.get('uid', '?')}, defaulting to Unknown Supplier")
 
         parsed_rows = []
-
         for idx, chunk in enumerate(chunks):
             logger.info(f"Calling Grok API for chunk {idx+1}/{len(chunks)} for UID {email.get('uid', '?')}")
             parsed = await call_grok_api(prompt_chat, chunk, env, session, process_id)
@@ -746,15 +781,13 @@ async def process_email_with_delay(
             if price > 5:
                 price = price / 100
                 row["Price"] = price
-
             if price > 5:
                 continue
 
             if not is_opis:
                 if not row.get("Supplier"):
                     row["Supplier"] = supplier
-                if not row.get("Supply"):
-                    row["Supply"] = supplier
+                # ✅ DO NOT overwrite Supply — AI or logic must handle it
 
             row = apply_mappings(row, mappings, is_opis, email_from=supplier)
 
