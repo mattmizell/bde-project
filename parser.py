@@ -257,31 +257,26 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
 # --- Extract Position Holder from Terminal ---
 def extract_position_holder(terminal: str, position_holders: Dict[str, str]) -> str:
     """
-    Extract the standardized supply name from a terminal string using position holder mappings.
-
-    Args:
-        terminal (str): The terminal name to search within.
-        position_holders (Dict[str, str]): A dictionary of prefix -> standardized supply name.
-
-    Returns:
-        str: The standardized supply name if a match is found, otherwise an empty string.
+    Extract the standardized supply name from a terminal string using known prefix mappings.
+    - Matches on full prefix at the start
+    - Matches on token-separated values (e.g., '/', '-', ' ')
+    Logs missed terminals for analysis.
     """
-    logger.debug(f"Entering extract_position_holder with terminal: {terminal}")
     terminal_upper = terminal.upper()
+    tokens = re.split(r"[\s\-/@]", terminal_upper)
 
     for prefix, supply in position_holders.items():
         prefix_upper = prefix.upper()
         if terminal_upper.startswith(prefix_upper):
-            logger.debug(f"Matched start of terminal: '{prefix_upper}' -> '{supply}'")
+            logger.debug(f"Matched supply (start match): {prefix_upper} -> {supply}")
             return supply
-        # Match prefix between delimiters (e.g., "-FH-MG-", "/FH-MG/", "@FH-MG@", etc.)
-        pattern = rf"[\-\/\s@]{re.escape(prefix_upper)}[\-\/\s@]"
-        if re.search(pattern, terminal_upper):
-            logger.debug(f"Matched embedded supply prefix with pattern '{pattern}' -> '{supply}'")
+        if prefix_upper in tokens:
+            logger.debug(f"Matched supply (token match): {prefix_upper} -> {supply}")
             return supply
 
-    logger.debug("No position holder match found, returning empty string")
+    logger.warning(f"No Supply match found for terminal: '{terminal}'")
     return ""
+
 
 
 # --- Apply Mappings to Rows ---
