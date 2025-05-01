@@ -510,43 +510,76 @@ def choose_best_content_from_email(msg) -> str:
 def clean_email_content(content: str) -> str:
     logger.debug(f"Entering clean_email_content with content length: {len(content)}")
     try:
+        # Decode email line breaks and cleanup
         content = content.replace("=\n", "").replace("=20", " ")
         logger.debug("Removed email line breaks and =20 characters")
+
+        # Remove long dashed lines
         content = re.sub(r"-{40,}", "", content)
         logger.debug("Removed long dashes")
+
+        # Reduce large blank gaps
         content = re.sub(r"\n{3,}", "\n\n", content)
-        logger.debug("Reduced multiple newlines to double newlines")
-        cleaned = "\n".join(line.strip() for line in content.splitlines())
+
+        # Normalize tabular rows that might be missing columns like "CHANGE"
+        lines = content.splitlines()
+        cleaned_lines = []
+        for line in lines:
+            stripped = line.strip()
+
+            # Detect tabular row with comma or hyphen-based terminals + price
+            if re.search(r"(MG|IA|KS)[,\s-]{1,}", stripped) and re.search(r"\d+\.\d{3,4}", stripped):
+                # Normalize multiple spaces/tabs
+                line = re.sub(r"[ \t]{2,}", "\t", line.strip())
+                cleaned_lines.append(line)
+            else:
+                cleaned_lines.append(stripped)
+
+        cleaned = "\n".join(cleaned_lines)
         logger.debug(f"Cleaned content length: {len(cleaned)}")
         logger.debug(f"Cleaned content (first 500 chars): {cleaned[:500]}...")
         logger.debug("Exiting clean_email_content")
         return cleaned
+
     except Exception as e:
         logger.error(f"Failed to clean content: {e}")
         logger.debug("Exiting clean_email_content with original content due to error")
         return content
 
+
 def split_content_into_chunks(content: str, max_length: int = 6000) -> List[str]:
     """
-    Split large text content into chunks not exceeding max_length.
-    Prefers to split at line breaks to preserve structure.
+    Split cleaned content into chunks for Grok API calls.
+    Keeps logical sections together (e.g., headers + their product rows).
+    Tries to split at double newlines (blank line separators).
     """
-    lines = content.splitlines(keepends=True)
+    logger.debug("Entering split_content_into_chunks")
+
+    sections = re.split(r"\n{2,}", content)  # split on double newlines
     chunks = []
     current_chunk = ""
 
-    for line in lines:
-        if len(current_chunk) + len(line) <= max_length:
-            current_chunk += line
+    for section in sections:
+        section = section.strip()
+        if not section:
+            continue
+
+        # Add spacing back between sections
+        section += "\n\n"
+
+        if len(current_chunk) + len(section) <= max_length:
+            current_chunk += section
         else:
             if current_chunk:
                 chunks.append(current_chunk.strip())
-            current_chunk = line
+            current_chunk = section
 
     if current_chunk:
         chunks.append(current_chunk.strip())
 
+    logger.info(f"split_content_into_chunks: created {len(chunks)} chunk(s)")
     return chunks
+
 
 # --- IMAP Functions ---
 def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
