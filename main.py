@@ -4,7 +4,13 @@ import aiofiles
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from parser import process_all_emails, process_status, load_process_status, logger
+from parser import (
+    process_all_emails,
+    process_status,
+    load_process_status,
+    delete_process_status,
+    logger,
+)
 
 app = FastAPI()
 
@@ -54,3 +60,8 @@ async def download_file(filename: str):
         return FileResponse(file_path, media_type='application/octet-stream', filename=filename)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="The file was not found")
+
+@app.post("/cleanup/{process_id}")
+async def cleanup_process(process_id: str):
+    delete_process_status(process_id)
+    return {"message": "Process status deleted"}
