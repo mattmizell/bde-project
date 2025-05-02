@@ -18,6 +18,7 @@ Extract one object per product/terminal row, including the following fields:
 - If the terminal name contains unrelated names (e.g., “Wallis Oil at Magellan”), prefer “Magellan” as the Position Holder/Supply.
 - Supply ≠ Supplier in many cases.
 - If unsure, set **Supply** to null.
+- Product rows may appear without a “CHANGE” column — do not drop them if Product Name and Price are present.
 
 ✅ Examples:
 1.

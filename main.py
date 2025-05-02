@@ -1,7 +1,7 @@
 import uuid
 import logging
 import aiofiles
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from parser import (
@@ -10,6 +10,7 @@ from parser import (
     load_process_status,
     delete_process_status,
     logger,
+    load_env
 )
 
 app = FastAPI()
@@ -27,8 +28,20 @@ app.add_middleware(
 logger.setLevel(logging.INFO)
 
 @app.post("/start-process")
-async def start_process(background_tasks: BackgroundTasks):
+async def start_process(request: Request, background_tasks: BackgroundTasks):
     process_id = str(uuid.uuid4())
+    model = request.query_params.get("model", "grok-3")
+    logger.info(f"🚀 Received start-process request. Assigned process_id={process_id}, model={model}")
+
+    try:
+        env = load_env()
+        logger.info(f"🌎 Loaded environment from .env: {env}")
+        env["MODEL"] = model  # Override with selected model
+        logger.info(f"🧠 Overriding MODEL for this run to: {model}")
+    except Exception as e:
+        logger.error(f"❌ Failed to load or override environment variables: {e}")
+        raise HTTPException(status_code=500, detail="Environment loading failed")
+
     process_status[process_id] = {
         "status": "starting",
         "email_count": 0,
@@ -38,8 +51,9 @@ async def start_process(background_tasks: BackgroundTasks):
         "error": None,
         "debug_log": f"debug_{process_id}.txt"
     }
-    logger.info(f"🚀 Starting process {process_id}")
-    background_tasks.add_task(process_all_emails, process_id, process_status)
+
+    logger.info(f"📦 Initialized process status and starting background task for process_id={process_id}")
+    background_tasks.add_task(process_all_emails, process_id, process_status, env)
     return {"process_id": process_id}
 
 @app.get("/status/{process_id}")
