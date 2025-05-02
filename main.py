@@ -18,7 +18,10 @@ app = FastAPI()
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://bde-frontend-pf3m.onrender.com"],
+    allow_origins=[
+        "https://bde-frontend-pf3m.onrender.com",
+        "https://bde-frontend-dropdown-test.onrender.com",  # ✅ Add this
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

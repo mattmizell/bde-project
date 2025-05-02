@@ -15,7 +15,7 @@ from email.parser import BytesParser
 from rapidfuzz import fuzz
 import logging
 
-
+# Trigger render redeploy
 # --- Config ---
 BASE_DIR: Path = Path(__file__).parent
 
@@ -34,6 +34,7 @@ GROK_MODEL = "grok-3-latest"
 
 # --- Setup ---
 process_status = {}
+# Trigger render redeploy
 
 # Configure logger
 logger = logging.getLogger("parser")
@@ -853,12 +854,20 @@ async def process_email_with_delay(
 
 
 
-async def process_all_emails(process_id: str, process_statuses: Dict[str, dict]) -> None:
+from typing import Optional
+
+async def process_all_emails(process_id: str, process_statuses: Dict[str, dict], model: Optional[str] = None) -> None:
     logger.info(f"Parser.py version: 2025-04-29 with domain_to_supplier fix, API timeout, increased delay, debug logging, and local logging fix")
     file_handler = setup_file_logging(process_id)
+
     try:
         logger.debug("Loading environment variables")
         env = load_env()
+
+        if model:
+            env["MODEL"] = model
+            logger.info(f"🧠 Overriding MODEL for this run to: {model}")
+
         initial_status = {
             "status": "running",
             "email_count": 0,
@@ -869,20 +878,17 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
             "debug_log": f"debug_{process_id}.txt",
         }
         process_statuses[process_id] = initial_status
-        logger.debug("Saving initial process status")
         save_process_status(process_id, initial_status)
         logger.info(f"Started process {process_id}, saved initial status")
 
         logger.debug("Fetching emails")
         emails = fetch_emails(env, process_id)
         process_statuses[process_id]["email_count"] = len(emails)
-        logger.debug(f"Saving process status with email_count: {len(emails)}")
         save_process_status(process_id, process_statuses[process_id])
         logger.info(f"Fetched {len(emails)} emails for process {process_id}")
 
         if not emails:
             process_statuses[process_id]["status"] = "done"
-            logger.debug("No emails to process, saving done status")
             save_process_status(process_id, process_statuses[process_id])
             logger.info(f"No emails to process for {process_id}")
             return
@@ -895,50 +901,42 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict])
         async with aiohttp.ClientSession() as session:
             for idx, email in enumerate(emails):
                 process_statuses[process_id]["current_email"] = idx + 1
-                logger.debug(f"Saving process status with current_email: {idx + 1}")
                 save_process_status(process_id, process_statuses[process_id])
                 logger.info(f"Processing email {idx + 1}/{len(emails)} for process {process_id}")
                 logger.debug(f"Email details: {email}")
+
                 valid_rows, skipped_rows, failed_email = await process_email_with_delay(email, env, process_id, session)
 
                 if valid_rows:
-                    logger.debug(f"Saving {len(valid_rows)} valid rows to CSV")
                     save_to_csv(valid_rows, output_file, process_id)
                     total_rows += len(valid_rows)
                     process_statuses[process_id]["row_count"] = total_rows
-                    logger.debug(f"Saving process status with row_count: {total_rows}")
                     save_process_status(process_id, process_statuses[process_id])
 
                 if failed_email:
                     failed_email["content"] = email.get("content", "")
                     failed_emails.append(failed_email)
-                    logger.debug(f"Added failed email: {failed_email}")
 
-                logger.debug("Sleeping for 5 seconds to avoid API rate limits")
                 await asyncio.sleep(5)
 
         if failed_emails:
-            logger.debug(f"Saving {len(failed_emails)} failed emails to CSV")
             save_failed_emails_to_csv(failed_emails, output_file, process_id)
 
         process_statuses[process_id]["status"] = "done"
         process_statuses[process_id]["output_file"] = output_file
-        logger.debug("Saving final process status as done")
         save_process_status(process_id, process_statuses[process_id])
         logger.info(f"Completed process {process_id} with {total_rows} rows")
 
-        logger.debug("Sleeping for 300 seconds before deleting process status")
         await asyncio.sleep(300)
-        logger.debug("Deleting process status")
         delete_process_status(process_id)
+
     except Exception as e:
         logger.error(f"Error in process_all_emails for process {process_id}: {str(e)}")
         process_statuses[process_id]["status"] = "error"
         process_statuses[process_id]["error"] = str(e)
-        logger.debug("Saving process status on error")
         save_process_status(process_id, process_statuses[process_id])
+
     finally:
-        logger.debug("Removing file logging handler")
         remove_file_logging(file_handler)
 
 # --- CSV Saving Functions ---
