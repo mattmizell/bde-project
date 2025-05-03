@@ -114,14 +114,21 @@ def load_process_status(process_id: str) -> Optional[Dict]:
         if state_file.exists():
             with open(state_file, "r", encoding="utf-8") as f:
                 status = json.load(f)
-                logger.debug(f"Loaded status for process {process_id}: {status}")
+                logger.debug(f"Loaded status for process {process_id} from file: {status}")
                 return status
         else:
-            logger.warning(f"Status file not found for process {process_id}: {state_file}")
-            return None
+            # Fallback to in-memory dict
+            fallback_status = process_status.get(process_id)
+            if fallback_status:
+                logger.warning(f"Status file not found for {process_id}, falling back to in-memory status")
+                return fallback_status
+            else:
+                logger.warning(f"No file or in-memory status found for {process_id}")
+                return None
     except Exception as e:
         logger.error(f"Failed to load status for process {process_id}: {e}")
         return None
+
 
 def delete_process_status(process_id: str) -> None:
     state_file = STATE_DIR / f"process_{process_id}.json"
