@@ -472,6 +472,22 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
     return row
 
 # --- Utilities ---
+def extract_domain_from_forwarded_headers(content: str, domain_to_supplier: Dict[str, str]) -> Optional[str]:
+    """
+    Scans email body for forwarded headers and extracts a matching supplier domain.
+    Works for all common From: formats with or without angle brackets.
+    """
+    forwarded_lines = re.findall(r"(?i)^From:\s*(.*)", content, re.MULTILINE)
+    for line in forwarded_lines:
+        # Extract email address from angle brackets or just line
+        match = re.search(r"[\w\.-]+@[\w\.-]+", line)
+        if match:
+            domain = match.group(0).split("@")[-1].strip().lower()
+            logging.getLogger("parser").info(f"Parsed forwarded domain: {domain}")
+            if domain in domain_to_supplier:
+                return domain_to_supplier[domain]
+    return None
+
 def load_env() -> Dict[str, str]:
     logger.debug("Entering load_env")
     load_dotenv()
@@ -746,16 +762,9 @@ async def process_email_with_delay(
                 logger.info(f"Parsed domain from from_addr: {domain}")
                 supplier = domain_to_supplier.get(domain)
 
-        if not supplier and "From:" in content:
-            forwarded_matches = re.finditer(r"From:\s*(.*?)\s*(?:<([^>]+)>|$)", content, re.IGNORECASE)
-            for match in forwarded_matches:
-                _, email_addr = match.groups()
-                if email_addr:
-                    domain = email_addr.split("@")[-1].strip().lower()
-                    logger.info(f"Parsed domain from forwarded From: {domain}")
-                    supplier = domain_to_supplier.get(domain)
-                    if supplier:
-                        break
+        # ✅ New fallback logic for forwarded domains
+        if not supplier:
+            supplier = extract_domain_from_forwarded_headers(content, domain_to_supplier)
 
         if not supplier:
             supplier = "Unknown Supplier"
