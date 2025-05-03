@@ -555,15 +555,15 @@ def clean_email_content(content: str) -> str:
         return content
 
 
-def split_content_into_chunks(content: str, max_length: int = 6000) -> List[str]:
-    """
-    Split cleaned content into chunks for Grok API calls.
-    Keeps logical sections together (e.g., headers + their product rows).
-    Tries to split at double newlines (blank line separators).
-    """
-    logger.debug("Entering split_content_into_chunks")
+import re
 
-    sections = re.split(r"\n{2,}", content)  # split on double newlines
+def split_content_into_chunks(content: str, max_chunk_size: int = 2000) -> List[str]:
+    """
+    Smart splitter: tries to split by sections (double newlines or headers), then by size.
+    """
+    # Step 1: Try to split by logical sections (double newlines or headers)
+    # You can refine this with regex for supplier/terminal/product headers
+    sections = re.split(r"\n\s*\n", content)
     chunks = []
     current_chunk = ""
 
@@ -572,21 +572,20 @@ def split_content_into_chunks(content: str, max_length: int = 6000) -> List[str]
         if not section:
             continue
 
-        # Add spacing back between sections
-        section += "\n\n"
-
-        if len(current_chunk) + len(section) <= max_length:
-            current_chunk += section
-        else:
+        # If adding this section would exceed max size, flush current chunk
+        if len(current_chunk) + len(section) + 2 > max_chunk_size:
             if current_chunk:
                 chunks.append(current_chunk.strip())
             current_chunk = section
+        else:
+            current_chunk += "\n\n" + section
 
     if current_chunk:
         chunks.append(current_chunk.strip())
 
     logger.info(f"split_content_into_chunks: created {len(chunks)} chunk(s)")
     return chunks
+
 
 
 # --- IMAP Functions ---
