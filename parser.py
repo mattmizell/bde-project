@@ -665,69 +665,68 @@ def load_prompt(filename: str) -> str:
     return prompt
 
 
-async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session: aiohttp.ClientSession, process_id: str) -> Optional[str]:
-    logger.info(f"Entering call_grok_api for process {process_id}")
+async def call_grok_api(
+    prompt: str,
+    content: str,
+    env: Dict[str, str],
+    session: aiohttp.ClientSession,
+    process_id: str
+) -> Optional[str]:
+    logger.info(f"📡 Entering call_grok_api for process {process_id}")
+
+    api_url = "https://api.x.ai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {env['XAI_API_KEY']}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": env.get("MODEL", "grok-3-latest"),
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": content}
+        ]
+    }
+
+    # 🔍 Log prompt and content details
+    logger.info(f"🧠 Prompt preview: {prompt[:200].replace(chr(10), ' ')}")
+    logger.info(f"📝 Content preview: {content[:200].replace(chr(10), ' ')}")
+    logger.debug(f"🧠 Full prompt:\n{prompt}")
+    logger.debug(f"📄 Full content:\n{content}")
+    logger.debug(f"📦 API payload:\n{json.dumps(payload, indent=2)}")
+
+    async def make_request():
+        logger.info(f"🔁 Sending POST request to {api_url}")
+        async with session.post(api_url, headers=headers, json=payload, timeout=90) as response:
+            logger.info(f"📨 Grok API HTTP status: {response.status}")
+            try:
+                response.raise_for_status()
+            except aiohttp.ClientResponseError as e:
+                error_body = await response.text()
+                logger.error(f"❌ Grok API error response body: {error_body}")
+                raise e
+            data = await response.json()
+            logger.info(f"✅ Grok API response received for process {process_id}")
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
+
+    timeout = 95
+    start_time = datetime.now()
+    logger.info(f"🕒 API request start time: {start_time}")
 
     try:
-        api_url = "https://api.x.ai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {env['XAI_API_KEY']}",
-            "Content-Type": "application/json"
-        }
+        result = await asyncio.wait_for(make_request(), timeout=timeout)
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        logger.info(f"⏱️ API request completed in {duration:.2f} seconds")
+        logger.info(f"✅ Parsed response (preview): {result[:200]}...")
+        return result
 
-        payload = {
-            "model": env.get("MODEL", "grok-3-latest"),
-            "messages": [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": content}
-            ]
-        }
-
-        # ✅ Logging details before the call
-        logger.info(f"Prompt loaded (first 200 chars): {prompt[:200].replace(chr(10), ' ')}")
-        logger.info(f"Content to parse (first 200 chars): {content[:200].replace(chr(10), ' ')}")
-        logger.debug(f"🧠 Full prompt:\n{prompt}")
-        logger.debug(f"📄 Full content:\n{content}")
-        logger.debug(f"📦 API payload:\n{json.dumps(payload, indent=2)}")
-
-        async def make_request():
-            logger.info(f"🔁 Sending POST request to {api_url}")
-            async with session.post(api_url, headers=headers, json=payload, timeout=90) as response:
-                logger.info(f"Response status: {response.status}")
-                try:
-                    response.raise_for_status()
-                except aiohttp.ClientResponseError as e:
-                    error_body = await response.text()
-                    logger.error(f"Grok API error response body: {error_body}")
-                    raise e
-                data = await response.json()
-                logger.info(f"✅ Grok API response received for process {process_id}")
-                return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
-
-        timeout = 95  # Increased coroutine timeout
-        start_time = datetime.now()
-        logger.info(f"API request start time: {start_time}")
-
-        try:
-            result = await asyncio.wait_for(make_request(), timeout=timeout)
-            end_time = datetime.now()
-            logger.info(f"API request end time: {end_time}, duration: {(end_time - start_time).total_seconds()} seconds")
-            logger.info(f"✅ API call completed successfully, result: {result[:200]}...")
-            return result
-        except asyncio.TimeoutError:
-            logger.error(f"❌ Grok API call timed out at coroutine level after {timeout} seconds for process {process_id}")
-            return None
-        except Exception as e:
-            logger.error(f"❌ Unexpected error while waiting for Grok API: {e}")
-            return None
-
-    except aiohttp.ClientTimeout:
-        logger.error(f"❌ Grok API call timed out at HTTP level after 90 seconds for process {process_id}")
+    except asyncio.TimeoutError:
+        logger.error(f"❌ Grok API coroutine timeout after {timeout} seconds for process {process_id}")
         return None
     except Exception as e:
-        logger.error(f"❌ Grok API call failed for process {process_id}: {e}")
+        logger.error(f"❌ Unexpected error in Grok API call for process {process_id}: {e}")
         return None
-
 
 # --- Processing Functions ---
 async def process_email_with_delay(
