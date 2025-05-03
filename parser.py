@@ -511,36 +511,44 @@ def extract_domain_from_forwarded_headers(content: str, domain_to_supplier: Dict
     return None
 
 def extract_domains_from_body(content: str, domain_to_supplier: Dict[str, str]) -> Optional[str]:
+    """
+    Scan all lines in email body to find company domains (exclude known relay domains)
+    and attempt to match them to known suppliers using exact or fallback domain logic.
+    """
     known_relays = {"outlook.com", "gmail.com", "yahoo.com", "hotmail.com", "icloud.com"}
     seen_domains = set()
-    logger.debug("Searching for all @-based domains in email body")
 
-    # NEW: Log first few lines of body content
-    lines = content.splitlines()
-    logger.debug(f"First 10 lines of content:\n" + "\n".join(lines[:10]))
+    logger.debug("🔍 extract_domains_from_body: BEGIN")
 
-    for match in re.findall(r'[\w\.-]+@([\w\.-]+\.\w+)', content):
-        domain = match.lower().strip()
+    # Log what we're actually scanning
+    logger.debug(f"📄 Scanning body content (first 1000 chars):\n{content[:1000]}")
+
+    matches = re.findall(r'[\w\.-]+@([\w\.-]+\.\w+)', content)
+    logger.debug(f"📧 Found domain matches: {matches}")
+
+    for domain in matches:
+        domain = domain.lower().strip()
         if domain in known_relays:
+            logger.debug(f"⏩ Skipping known relay domain: {domain}")
             continue
 
+        # Exact match
         if domain in domain_to_supplier:
-            logger.info(f"✅ Matched exact domain in body: {domain}")
+            logger.info(f"✅ Exact domain match: {domain} → {domain_to_supplier[domain]}")
             return domain_to_supplier[domain]
 
+        # Fallback match by removing subdomain
         parts = domain.split('.')
         if len(parts) > 2:
             base_domain = '.'.join(parts[-2:])
             if base_domain in domain_to_supplier:
-                logger.info(f"✅ Matched fallback domain in body: {base_domain}")
+                logger.info(f"✅ Fallback match from {domain} → {base_domain} → {domain_to_supplier[base_domain]}")
                 return domain_to_supplier[base_domain]
 
         seen_domains.add(domain)
 
     logger.warning(f"❌ No domain match found in body. Domains seen: {seen_domains}")
     return None
-
-
 
 
 def load_env() -> Dict[str, str]:
