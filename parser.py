@@ -811,16 +811,12 @@ async def process_email_with_delay(
     failed_email = None
 
     try:
-        content = clean_email_content(email.get("content", ""))
-        if not content:
+        raw_body = email.get("content", "")
+        if not raw_body:
             raise ValueError("Empty email content")
 
+        content = clean_email_content(raw_body)
         logger.info(f"Email content length after cleaning: {len(content)} characters")
-
-        # Log all @domains found in the body
-        all_domains = re.findall(r'@([\w\.-]+)', content)
-        logger.debug(f"Email body domains found: {set(all_domains)}")
-
         chunks = split_content_into_chunks(content, max_chunk_size=6000)
         logger.info(f"Split content into {len(chunks)} chunks")
 
@@ -852,7 +848,6 @@ async def process_email_with_delay(
                 domain = match.group(1).strip().lower()
                 logger.info(f"Parsed domain from from_addr: {domain}")
                 supplier = domain_to_supplier.get(domain)
-
                 if not supplier:
                     logger.warning(f"Domain '{domain}' not found in domain_to_supplier. Attempting fuzzy match...")
                     for known_domain, known_supplier in domain_to_supplier.items():
@@ -863,12 +858,11 @@ async def process_email_with_delay(
 
         if not supplier:
             logger.debug("Trying extract_domain_from_forwarded_headers()...")
-            supplier = extract_domain_from_forwarded_headers(content, domain_to_supplier)
+            supplier = extract_domain_from_forwarded_headers(raw_body, domain_to_supplier)
 
         if not supplier:
             logger.debug("Trying extract_domains_from_body()...")
-            supplier = extract_domains_from_body(content, domain_to_supplier)
-            logger.info(f"extract_domains_from_body returned supplier: {supplier}")
+            supplier = extract_domains_from_body(raw_body, domain_to_supplier)
 
         if not supplier:
             supplier = "Unknown Supplier"
@@ -943,9 +937,6 @@ async def process_email_with_delay(
     logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
     return valid_rows, skipped_rows, failed_email
 
-
-
-# touch
 
 from typing import Optional
 
