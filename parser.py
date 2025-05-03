@@ -452,35 +452,6 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
     logger.debug("Exiting apply_mappings")
     return row
 
-
-
-    # Terminal mappings
-    supplier = row.get("Supplier", "")
-    logger.debug(f"Processing Terminal: {terminal}, Supplier: {supplier}")
-    if terminal in mappings["terminals"]:
-        logger.debug(f"Found terminal '{terminal}' in mappings, applying terminal mappings")
-        for mapping in mappings["terminals"][terminal]:
-            condition = mapping["condition"]
-            logger.debug(f"Checking terminal mapping: standardized={mapping['standardized']}, condition={condition}")
-            if condition is None:
-                row["Terminal"] = mapping["standardized"]
-                logger.debug(f"Translated Terminal: {terminal} -> {row['Terminal']}")
-                break
-            elif condition == 'Supplier in ["Phillips 66", "Cenex"]' and supplier in ["Phillips 66", "Cenex"]:
-                row["Terminal"] = mapping["standardized"]
-                logger.debug(f"Translated Terminal: {terminal} -> {row['Terminal']} (condition: Supplier in ['Phillips 66', 'Cenex'])")
-                break
-            elif condition == 'Supplier not in ["Phillips 66", "Cenex"]' and supplier not in ["Phillips 66", "Cenex"]:
-                row["Terminal"] = mapping["standardized"]
-                logger.debug(f"Translated Terminal: {terminal} -> {row['Terminal']} (condition: Supplier not in ['Phillips 66', 'Cenex'])")
-                break
-    else:
-        logger.debug(f"Terminal '{terminal}' not found in mappings, keeping original value")
-
-    logger.debug(f"Final row after mappings: {row}")
-    logger.debug("Exiting apply_mappings")
-    return row
-
 # --- Utilities ---
 def extract_domain_from_forwarded_headers(content: str, domain_to_supplier: Dict[str, str]) -> Optional[str]:
     """
@@ -812,38 +783,35 @@ async def process_email_with_delay(
     session: aiohttp.ClientSession
 ) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
 
-    logger.debug(f"📬 Entering process_email_with_delay for UID {email.get('uid', '?')} in process {process_id}")
+    logger.debug(f"Entering process_email_with_delay for UID {email.get('uid', '?')} in process {process_id}")
+    logger.debug(f"📨 Raw email content for UID {email.get('uid')} (first 500 chars):\n{email.get('content', '')[:500]}")
     valid_rows = []
     skipped_rows = []
     failed_email = None
 
     try:
-        raw_content = email.get("content", "")
-        logger.debug(f"📨 Raw email content for UID {email.get('uid')} (first 500 chars):\n{raw_content[:500]}")
+        raw_body = email.get("content", "")
+        if not raw_body:
+            raise ValueError("Empty email content")
 
-        content = clean_email_content(raw_content)
-        if not content:
-            raise ValueError("Empty email content after cleaning")
-
-        logger.info(f"🧹 Email content length after cleaning: {len(content)} characters")
-        logger.debug(f"🧹 Cleaned content sample (first 500 chars):\n{content[:500]}")
-
+        content = clean_email_content(raw_body)
+        logger.info(f"Email content length after cleaning: {len(content)} characters")
         chunks = split_content_into_chunks(content, max_chunk_size=6000)
-        logger.info(f"✂️ Split content into {len(chunks)} chunks")
+        logger.info(f"Split content into {len(chunks)} chunks")
 
         mappings = load_mappings("mappings.xlsx")
         domain_to_supplier = {k.strip().lower(): v.strip() for k, v in mappings.get("domain_to_supplier", {}).items()}
 
-        logger.debug(f"🔗 Loaded domain_to_supplier mapping with {len(domain_to_supplier)} entries")
-        logger.debug(f"🔗 Sample domain mappings: {list(domain_to_supplier.items())[:5]}")
+        logger.debug(f"domain_to_supplier mapping loaded with {len(domain_to_supplier)} entries")
+        logger.debug(f"Example entries: {list(domain_to_supplier.items())[:5]}")
 
+        content_lower = content.lower()
         subject_lower = email.get("subject", "").lower()
-        is_opis = ("opis" in content.lower() and ("rack" in content.lower() or "wholesale" in content.lower())) or \
+        is_opis = ("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
                   ("opis" in subject_lower and ("rack" in subject_lower or "wholesale" in subject_lower))
 
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
-        logger.info(f"🧠 Using prompt file: {prompt_file}")
 
         if not is_opis:
             prompt_chat += "\n\n" + supply_examples_prompt_block(mappings.get("position_holders", {}))
@@ -857,40 +825,36 @@ async def process_email_with_delay(
             match = re.search(r"[\w\.-]+@([\w\.-]+)", email_from)
             if match:
                 domain = match.group(1).strip().lower()
-                logger.info(f"📛 Parsed domain from from_addr: {domain}")
+                logger.info(f"Parsed domain from from_addr: {domain}")
                 supplier = domain_to_supplier.get(domain)
-
                 if not supplier:
-                    logger.warning(f"⚠️ Domain '{domain}' not found in domain_to_supplier. Attempting fuzzy match...")
+                    logger.warning(f"Domain '{domain}' not found in domain_to_supplier. Attempting fuzzy match...")
                     for known_domain, known_supplier in domain_to_supplier.items():
                         if domain.endswith(known_domain):
                             supplier = known_supplier
-                            logger.info(f"✅ Fuzzy matched domain '{domain}' to supplier '{supplier}' via '{known_domain}'")
+                            logger.info(f"Fuzzy matched supplier '{supplier}' for domain '{domain}' using known '{known_domain}'")
                             break
 
         if not supplier:
-            logger.debug("🔍 Trying extract_domain_from_forwarded_headers()...")
-            supplier = extract_domain_from_forwarded_headers(content, domain_to_supplier)
+            logger.debug("Trying extract_domain_from_forwarded_headers()...")
+            supplier = extract_domain_from_forwarded_headers(raw_body, domain_to_supplier)
 
         if not supplier:
-            logger.debug("🔍 Trying extract_domains_from_body()...")
-            supplier = extract_domains_from_body(content, domain_to_supplier)
-            logger.info(f"extract_domains_from_body returned supplier: {supplier}")
+            logger.debug("Trying extract_domains_from_body()...")
+            supplier = extract_domains_from_body(raw_body, domain_to_supplier)
 
         if not supplier:
             supplier = "Unknown Supplier"
-            logger.warning(f"❌ No supplier identified for UID {email.get('uid', '?')}, defaulting to Unknown Supplier")
+            logger.warning(f"No supplier identified for UID {email.get('uid', '?')}, defaulting to Unknown Supplier")
 
         parsed_rows = []
         for idx, chunk in enumerate(chunks):
-            logger.info(f"📤 Calling Grok API for chunk {idx + 1}/{len(chunks)} for UID {email.get('uid', '?')}")
-            logger.debug(f"📨 Prompt being sent to Grok (first 500 chars):\n{prompt_chat[:500]}")
-            logger.debug(f"📄 Chunk content (first 500 chars):\n{chunk[:500]}")
-
+            logger.info(f"Calling Grok API for chunk {idx+1}/{len(chunks)} for UID {email.get('uid', '?')}")
+            logger.debug(f"Prompt being sent to Grok for UID {email.get('uid')}:\n{prompt_chat}\n---\nChunk:\n{chunk}")
             parsed = await call_grok_api_with_retry(prompt_chat, chunk, env, session, process_id)
 
             if parsed is None:
-                logger.warning(f"⚠️ Grok API returned None for chunk {idx + 1} of UID {email.get('uid', '?')}")
+                logger.warning(f"Grok API returned None for chunk {idx+1} of UID {email.get('uid', '?')}")
                 continue
 
             if parsed.startswith("```json"):
@@ -902,10 +866,10 @@ async def process_email_with_delay(
                     raise ValueError(f"Grok response not a list for chunk {idx+1}")
                 parsed_rows.extend(rows)
             except Exception as ex:
-                logger.error(f"💥 Failed to parse Grok response for chunk {idx+1}: {ex}")
+                logger.error(f"Failed to parse Grok response for chunk {idx+1}: {ex}")
                 continue
 
-        logger.info(f"✅ Total parsed rows across all chunks: {len(parsed_rows)} for UID {email.get('uid', '?')}")
+        logger.info(f"Total parsed rows across all chunks: {len(parsed_rows)} for UID {email.get('uid', '?')}")
 
         for row in parsed_rows:
             if not isinstance(row, dict):
@@ -920,9 +884,8 @@ async def process_email_with_delay(
             if price > 5:
                 continue
 
-            if not is_opis:
-                if not row.get("Supplier"):
-                    row["Supplier"] = supplier
+            if not is_opis and not row.get("Supplier"):
+                row["Supplier"] = supplier
 
             row = apply_mappings(row, mappings, is_opis, email_from=supplier)
 
@@ -939,7 +902,7 @@ async def process_email_with_delay(
 
         if valid_rows:
             mark_email_as_processed(email.get("uid", ""), env)
-            logger.info(f"✅ Parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
+            logger.info(f"Parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
 
     except Exception as ex:
         failed_email = {
@@ -948,11 +911,102 @@ async def process_email_with_delay(
             "from_addr": email.get("from_addr", ""),
             "error": str(ex),
         }
-        logger.error(f"❗ Failed to process email UID {email.get('uid', '?')}: {str(ex)}")
+        logger.error(f"Failed to process email UID {email.get('uid', '?')}: {str(ex)}")
 
-    logger.debug(f"⬅️ Exiting process_email_with_delay with {len(valid_rows)} valid rows")
+    logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
     return valid_rows, skipped_rows, failed_email
 
+
+from typing import Optional
+
+#DELAY DELETION OF STATUS
+def schedule_delayed_status_deletion(process_id: str, delay_seconds: int = 300):
+    async def delete_later():
+        await asyncio.sleep(delay_seconds)
+        delete_process_status(process_id)
+    asyncio.create_task(delete_later())
+
+async def process_all_emails(process_id: str, process_statuses: Dict[str, dict], model: Optional[str] = None) -> None:
+    logger.info(f"Parser.py version: 2025-05-02 with model selection, dynamic prompt injection, supply mapping, and full logging")
+    file_handler = setup_file_logging(process_id)
+
+    try:
+        logger.debug("Loading environment variables")
+        env = load_env()
+
+        if model:
+            env["MODEL"] = model
+            logger.info(f"🧠 Overriding MODEL for this run to: {model}")
+
+        initial_status = {
+            "status": "running",
+            "email_count": 0,
+            "current_email": 0,
+            "row_count": 0,
+            "output_file": None,
+            "error": None,
+            "debug_log": f"debug_{process_id}.txt",
+        }
+        process_statuses[process_id] = initial_status
+        save_process_status(process_id, initial_status)
+        logger.info(f"Started process {process_id}, saved initial status")
+
+        logger.debug("Fetching emails")
+        emails = fetch_emails(env, process_id)
+        process_statuses[process_id]["email_count"] = len(emails)
+        save_process_status(process_id, process_statuses[process_id])
+        logger.info(f"Fetched {len(emails)} emails for process {process_id}")
+
+        if not emails:
+            process_statuses[process_id]["status"] = "done"
+            save_process_status(process_id, process_statuses[process_id])
+            logger.info(f"No emails to process for {process_id}")
+            return
+
+        output_file = f"parsed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        total_rows = 0
+        failed_emails = []
+
+        logger.debug("Creating aiohttp ClientSession")
+        async with aiohttp.ClientSession() as session:
+            for idx, email in enumerate(emails):
+                process_statuses[process_id]["current_email"] = idx + 1
+                save_process_status(process_id, process_statuses[process_id])
+                logger.info(f"Processing email {idx + 1}/{len(emails)} for process {process_id}")
+                logger.debug(f"Email details: {email}")
+
+                valid_rows, skipped_rows, failed_email = await process_email_with_delay(email, env, process_id, session)
+
+                if valid_rows:
+                    save_to_csv(valid_rows, output_file, process_id)
+                    total_rows += len(valid_rows)
+                    process_statuses[process_id]["row_count"] = total_rows
+                    save_process_status(process_id, process_statuses[process_id])
+
+                if failed_email:
+                    failed_email["content"] = email.get("content", "")
+                    failed_emails.append(failed_email)
+
+                await asyncio.sleep(5)
+
+        if failed_emails:
+            save_failed_emails_to_csv(failed_emails, output_file, process_id)
+
+        process_statuses[process_id]["status"] = "done"
+        process_statuses[process_id]["output_file"] = output_file
+        save_process_status(process_id, process_statuses[process_id])
+        logger.info(f"Completed process {process_id} with {total_rows} rows")
+
+        schedule_delayed_status_deletion(process_id, delay_seconds=300)
+
+    except Exception as e:
+        logger.error(f"Error in process_all_emails for process {process_id}: {str(e)}")
+        process_statuses[process_id]["status"] = "error"
+        process_statuses[process_id]["error"] = str(e)
+        save_process_status(process_id, process_statuses[process_id])
+
+    finally:
+        remove_file_logging(file_handler)
 
 # --- CSV Saving Functions ---
 def save_to_csv(data: List[Dict], output_filename: str, process_id: str) -> None:
