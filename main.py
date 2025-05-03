@@ -30,30 +30,17 @@ app.add_middleware(
 )
 
 # Configure logging
-logger.setLevel(logging.INFO)
+import sys
 
-@app.post("/start-process")
-async def start_process(request: Request, background_tasks: BackgroundTasks):
-    process_id = str(uuid.uuid4())
-    model = request.query_params.get("model", "grok-3")
-    logger.info(f"🚀 Received start-process request. Assigned process_id={process_id}, model={model}")
+# Configure root logger
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 
-    process_status[process_id] = {
-        "status": "starting",
-        "email_count": 0,
-        "current_email": 0,
-        "row_count": 0,
-        "output_file": None,
-        "error": None,
-        "debug_log": f"debug_{process_id}.txt"
-    }
-
-    # ✅ ADD THIS LINE:
-    save_process_status(process_id, process_status[process_id])
-
-    logger.info(f"📦 Initialized process status and starting background task for process_id={process_id}")
-    background_tasks.add_task(process_all_emails, process_id, process_status, model)
-    return {"process_id": process_id}
+# Named logger for this module
+logger = logging.getLogger("main")
 
 
 
