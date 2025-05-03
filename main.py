@@ -39,8 +39,8 @@ async def start_process(request: Request, background_tasks: BackgroundTasks):
     try:
         env = load_env()
         logger.info(f"🌎 Loaded environment from .env: {env}")
-        env["MODEL"] = model  # Override with selected model
-        logger.info(f"🧠 Overriding MODEL for this run to: {model}")
+        env["MODEL"] = model
+        logger.info(f"🧠 Overriding MODEL in env to: {env['MODEL']}")
     except Exception as e:
         logger.error(f"❌ Failed to load or override environment variables: {e}")
         raise HTTPException(status_code=500, detail="Environment loading failed")
