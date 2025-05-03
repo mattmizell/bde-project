@@ -480,19 +480,61 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
 # --- Utilities ---
 def extract_domain_from_forwarded_headers(content: str, domain_to_supplier: Dict[str, str]) -> Optional[str]:
     """
-    Scans email body for forwarded headers and extracts a matching supplier domain.
-    Works for all common From: formats with or without angle brackets.
+    Scans the email content for forwarded headers and extracts a simplified domain
+    to match against known supplier domains. Supports lines like "From: Name <email@domain.com>".
     """
+    logger = logging.getLogger("parser")
     forwarded_lines = re.findall(r"(?i)^From:\s*(.*)", content, re.MULTILINE)
+
     for line in forwarded_lines:
-        # Extract email address from angle brackets or just line
         match = re.search(r"[\w\.-]+@[\w\.-]+", line)
         if match:
-            domain = match.group(0).split("@")[-1].strip().lower()
-            logging.getLogger("parser").info(f"Parsed forwarded domain: {domain}")
-            if domain in domain_to_supplier:
-                return domain_to_supplier[domain]
+            full_domain = match.group(0).split("@")[-1].strip().lower()
+            logger.info(f"Parsed forwarded domain: {full_domain}")
+
+            # Try full domain first
+            if full_domain in domain_to_supplier:
+                return domain_to_supplier[full_domain]
+
+            # Fallback to simplified base domain (e.g., wallis.com from mail.wallis.com)
+            parts = full_domain.split(".")
+            if len(parts) >= 2:
+                base_domain = ".".join(parts[-2:])  # get last two segments
+                logger.info(f"Trying base domain fallback: {base_domain}")
+                if base_domain in domain_to_supplier:
+                    return domain_to_supplier[base_domain]
+
     return None
+
+def extract_domains_from_body(content: str, domain_to_supplier: Dict[str, str]) -> Optional[str]:
+    """
+    Scan all lines in email body to find company domains (exclude known relay domains)
+    and attempt to match them to known suppliers using exact or fallback domain logic.
+    """
+    known_relays = {"outlook.com", "gmail.com", "yahoo.com", "hotmail.com", "icloud.com"}
+    seen_domains = set()
+
+    for match in re.findall(r'[\w\.-]+@([\w\.-]+\.\w+)', content):
+        domain = match.lower().strip()
+        if domain in known_relays:
+            continue
+
+        # Exact match
+        if domain in domain_to_supplier:
+            return domain_to_supplier[domain]
+
+        # Fallback match by dropping subdomains
+        parts = domain.split('.')
+        if len(parts) > 2:
+            base_domain = '.'.join(parts[-2:])  # e.g., mail.wallis.com → wallis.com
+            if base_domain in domain_to_supplier:
+                return domain_to_supplier[base_domain]
+
+        seen_domains.add(domain)
+
+    logger.debug(f"No domain match found in body. Domains seen: {seen_domains}")
+    return None
+
 
 def load_env() -> Dict[str, str]:
     logger.debug("Entering load_env")
@@ -807,12 +849,16 @@ async def process_email_with_delay(
             supplier = extract_domain_from_forwarded_headers(content, domain_to_supplier)
 
         if not supplier:
+            supplier = extract_domains_from_body(content, domain_to_supplier)
+
+        if not supplier:
             supplier = "Unknown Supplier"
             logger.warning(f"No supplier identified for UID {email.get('uid', '?')}, defaulting to Unknown Supplier")
 
         parsed_rows = []
         for idx, chunk in enumerate(chunks):
             logger.info(f"Calling Grok API for chunk {idx+1}/{len(chunks)} for UID {email.get('uid', '?')}")
+            logger.debug(f"Prompt being sent to Grok for UID {email.get('uid')}:\n{prompt_chat}\n---\nChunk:\n{chunk}")
             parsed = await call_grok_api_with_retry(prompt_chat, chunk, env, session, process_id)
 
             if parsed is None:
