@@ -517,14 +517,22 @@ def extract_domains_from_body(content: str, domain_to_supplier: Dict[str, str]) 
     """
     known_relays = {"outlook.com", "gmail.com", "yahoo.com", "hotmail.com", "icloud.com"}
     seen_domains = set()
+    logger.debug("🔍 Searching for all @-based domains in email body")
 
-    for match in re.findall(r'[\w\.-]+@([\w\.-]+\.\w+)', content):
+    matches = re.findall(r'[\w\.-]+@([\w\.-]+\.\w+)', content)
+    logger.debug(f"📬 Found {len(matches)} domain candidates from body content")
+
+    for match in matches:
         domain = match.lower().strip()
         if domain in known_relays:
+            logger.debug(f"🚫 Skipping known relay domain: {domain}")
             continue
+
+        logger.debug(f"🕵️ Checking domain: {domain}")
 
         # Exact match
         if domain in domain_to_supplier:
+            logger.info(f"✅ Exact domain match: {domain} → {domain_to_supplier[domain]}")
             return domain_to_supplier[domain]
 
         # Fallback match by dropping subdomains
@@ -532,12 +540,14 @@ def extract_domains_from_body(content: str, domain_to_supplier: Dict[str, str]) 
         if len(parts) > 2:
             base_domain = '.'.join(parts[-2:])  # e.g., mail.wallis.com → wallis.com
             if base_domain in domain_to_supplier:
+                logger.info(f"🔁 Fallback match: {domain} → {base_domain} → {domain_to_supplier[base_domain]}")
                 return domain_to_supplier[base_domain]
 
         seen_domains.add(domain)
 
-    logger.debug(f"No domain match found in body. Domains seen: {seen_domains}")
+    logger.warning(f"❌ No domain match found in body. Domains seen: {seen_domains}")
     return None
+
 
 
 def load_env() -> Dict[str, str]:
