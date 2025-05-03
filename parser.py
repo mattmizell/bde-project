@@ -687,7 +687,12 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
             logger.info(f"Sending POST request to {api_url}")
             async with session.post(api_url, headers=headers, json=payload, timeout=90) as response:
                 logger.info(f"Response status: {response.status}")
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except aiohttp.ClientResponseError as e:
+                    error_body = await response.text()
+                    logger.error(f"Grok API error response body: {error_body}")
+                    raise e
                 data = await response.json()
                 logger.info(f"Grok API response received for process {process_id}")
                 return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
