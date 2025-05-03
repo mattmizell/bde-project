@@ -769,6 +769,9 @@ async def process_email_with_delay(
         mappings = load_mappings("mappings.xlsx")
         domain_to_supplier = {k.strip().lower(): v.strip() for k, v in mappings.get("domain_to_supplier", {}).items()}
 
+        logger.debug(f"domain_to_supplier mapping loaded with {len(domain_to_supplier)} entries")
+        logger.debug(f"Example entries: {list(domain_to_supplier.items())[:5]}")
+
         content_lower = content.lower()
         subject_lower = email.get("subject", "").lower()
         is_opis = ("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
@@ -777,7 +780,6 @@ async def process_email_with_delay(
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
 
-        # 🧠 Dynamically append prompt examples (non-OPIS only)
         if not is_opis:
             prompt_chat += "\n\n" + supply_examples_prompt_block(mappings.get("position_holders", {}))
             prompt_chat += "\n\n" + supply_lookup_prompt_block(mappings.get("supply_lookup", {}))
@@ -785,14 +787,22 @@ async def process_email_with_delay(
 
         email_from = email.get("from_addr", "")
         supplier = None
+
         if email_from:
-            match = re.search(r"[\w\.-]+@[\w\.-]+", email_from)
+            match = re.search(r"[\w\.-]+@([\w\.-]+)", email_from)
             if match:
-                domain = match.group(0).split("@")[-1].strip().lower()
+                domain = match.group(1).strip().lower()
                 logger.info(f"Parsed domain from from_addr: {domain}")
                 supplier = domain_to_supplier.get(domain)
 
-        # ✅ New fallback logic for forwarded domains
+                if not supplier:
+                    logger.warning(f"Domain '{domain}' not found in domain_to_supplier. Attempting fuzzy match...")
+                    for known_domain, known_supplier in domain_to_supplier.items():
+                        if domain.endswith(known_domain):
+                            supplier = known_supplier
+                            logger.info(f"Fuzzy matched supplier '{supplier}' for domain '{domain}' using known '{known_domain}'")
+                            break
+
         if not supplier:
             supplier = extract_domain_from_forwarded_headers(content, domain_to_supplier)
 
@@ -839,7 +849,7 @@ async def process_email_with_delay(
             if not is_opis:
                 if not row.get("Supplier"):
                     row["Supplier"] = supplier
-                # ✅ DO NOT overwrite Supply — AI or logic must handle it
+                # Supply is set by Grok or mapping logic, do not overwrite here
 
             row = apply_mappings(row, mappings, is_opis, email_from=supplier)
 
@@ -869,6 +879,7 @@ async def process_email_with_delay(
 
     logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
     return valid_rows, skipped_rows, failed_email
+
 
 # touch
 
