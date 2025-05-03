@@ -169,16 +169,18 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             for index, row in df_suppliers.iterrows():
                 raw_value = str(row["Raw Value"]).strip()
                 standardized_value = str(row["Standardized Value"]).strip()
-                domain = str(row.get("Domain", "")).strip()
+                domain = str(row.get("Domain", "")).strip().lower()
                 if pd.isna(raw_value) or pd.isna(standardized_value):
                     logger.warning(f"Skipping invalid row in SupplierMappings: {row.to_dict()}")
                     continue
                 mappings["suppliers"][raw_value] = standardized_value
                 if domain:
-                    mappings["domain_to_supplier"][domain.lower()] = standardized_value
-            logger.debug(f"Loaded {len(mappings['suppliers'])} suppliers, {len(mappings['domain_to_supplier'])} domain mappings")
+                    mappings["domain_to_supplier"][domain] = standardized_value
+                    logger.debug(f"📫 Added domain mapping: {domain} → {standardized_value}")
+            logger.info(f"✅ Loaded {len(mappings['suppliers'])} supplier names")
+            logger.info(f"✅ Loaded {len(mappings['domain_to_supplier'])} domain-to-supplier mappings")
         else:
-            logger.warning("Supplier mappings sheet not found.")
+            logger.warning("❌ Supplier mappings sheet not found.")
 
         # Load SupplyMappings
         supply_sheet = None
@@ -196,9 +198,9 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
                     logger.warning(f"Skipping invalid row in SupplyMappings: {row.to_dict()}")
                     continue
                 mappings["position_holders"][raw_value] = standardized_value
-            logger.debug(f"Loaded {len(mappings['position_holders'])} position holder mappings")
+            logger.info(f"✅ Loaded {len(mappings['position_holders'])} position holder mappings")
         else:
-            logger.warning("Supply mappings sheet not found.")
+            logger.warning("❌ Supply mappings sheet not found.")
 
         # Load ProductMappings
         product_sheet = None
@@ -216,9 +218,9 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
                     logger.warning(f"Skipping invalid row in ProductMappings: {row.to_dict()}")
                     continue
                 mappings["products"][raw_value] = standardized_value
-            logger.debug(f"Loaded {len(mappings['products'])} product mappings")
+            logger.info(f"✅ Loaded {len(mappings['products'])} product mappings")
         else:
-            logger.warning("Product mappings sheet not found.")
+            logger.warning("❌ Product mappings sheet not found.")
 
         # Load TerminalMappings
         terminal_sheet = None
@@ -242,11 +244,11 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
                     "standardized": standardized_value,
                     "condition": condition if pd.notna(condition) else None
                 })
-            logger.debug(f"Loaded {len(mappings['terminals'])} terminal mappings")
+            logger.info(f"✅ Loaded {len(mappings['terminals'])} terminal mappings")
         else:
-            logger.warning("Terminal mappings sheet not found.")
+            logger.warning("❌ Terminal mappings sheet not found.")
 
-        # ✅ Load SupplyLookupMappings
+        # Load SupplyLookupMappings
         supply_lookup_sheet = None
         for sheet_name in ["SupplyLookupMappings", "Supply Prefixes", "Supply Lookup"]:
             if sheet_name in xl.sheet_names:
@@ -258,25 +260,25 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             for index, row in df_lookup.iterrows():
                 raw_prefix = row.get("Prefix")
                 raw_supply = row.get("Supply")
-
                 if pd.notna(raw_prefix) and pd.notna(raw_supply):
                     prefix = str(raw_prefix).strip()
                     supply = str(raw_supply).strip()
                     if prefix and supply:
                         mappings["supply_lookup"][prefix] = supply
+                        logger.debug(f"🔗 Supply prefix mapping: {prefix} → {supply}")
                     else:
                         logger.warning(f"⚠️ Empty after strip in SupplyLookupMappings: {row.to_dict()}")
                 else:
                     logger.warning(f"⚠️ Skipping row with NaN in SupplyLookupMappings: {row.to_dict()}")
-            logger.info(f"Loaded {len(mappings['supply_lookup'])} supply prefix mappings")
+            logger.info(f"✅ Loaded {len(mappings['supply_lookup'])} supply prefix mappings")
         else:
-            logger.warning("SupplyLookupMappings sheet not found.")
+            logger.warning("❌ SupplyLookupMappings sheet not found.")
 
         logger.debug("Exiting load_mappings")
         return mappings
 
     except Exception as e:
-        logger.error(f"Failed to load mappings from {file_path}: {e}")
+        logger.error(f"❌ Failed to load mappings from {file_path}: {e}")
         return {
             "suppliers": {},
             "domain_to_supplier": {},
@@ -285,6 +287,8 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             "terminals": {},
             "supply_lookup": {}
         }
+
+
 
 # --- Prompt Helpers ---
 def supply_examples_prompt_block(position_holders: Dict[str, str]) -> str:
@@ -805,6 +809,11 @@ async def process_email_with_delay(
             raise ValueError("Empty email content")
 
         logger.info(f"Email content length after cleaning: {len(content)} characters")
+
+        # Log all @domains found in the body
+        all_domains = re.findall(r'@([\w\.-]+)', content)
+        logger.debug(f"Email body domains found: {set(all_domains)}")
+
         chunks = split_content_into_chunks(content, max_chunk_size=6000)
         logger.info(f"Split content into {len(chunks)} chunks")
 
@@ -846,10 +855,13 @@ async def process_email_with_delay(
                             break
 
         if not supplier:
+            logger.debug("Trying extract_domain_from_forwarded_headers()...")
             supplier = extract_domain_from_forwarded_headers(content, domain_to_supplier)
 
         if not supplier:
+            logger.debug("Trying extract_domains_from_body()...")
             supplier = extract_domains_from_body(content, domain_to_supplier)
+            logger.info(f"extract_domains_from_body returned supplier: {supplier}")
 
         if not supplier:
             supplier = "Unknown Supplier"
@@ -892,10 +904,8 @@ async def process_email_with_delay(
             if price > 5:
                 continue
 
-            if not is_opis:
-                if not row.get("Supplier"):
-                    row["Supplier"] = supplier
-                # Supply is set by Grok or mapping logic, do not overwrite here
+            if not is_opis and not row.get("Supplier"):
+                row["Supplier"] = supplier
 
             row = apply_mappings(row, mappings, is_opis, email_from=supplier)
 
@@ -925,6 +935,7 @@ async def process_email_with_delay(
 
     logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
     return valid_rows, skipped_rows, failed_email
+
 
 
 # touch
