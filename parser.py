@@ -712,6 +712,30 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
         logger.error(f"💥 Exception during Grok API call: {e}")
         return None
 
+    # --- Retry Wrapper ---
+
+
+async def call_grok_api_with_retry(
+        prompt: str,
+        content: str,
+        env: Dict[str, str],
+        session: aiohttp.ClientSession,
+        process_id: str,
+        max_retries: int = 3,
+        delay_seconds: int = 10
+) -> Optional[str]:
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"🔁 Grok call attempt {attempt}/{max_retries} for process {process_id}")
+        result = await call_grok_api(prompt, content, env, session, process_id)
+        if result:
+            return result
+        if attempt < max_retries:
+            logger.warning(f"⏳ Retrying in {delay_seconds} seconds...")
+            await asyncio.sleep(delay_seconds)
+
+    logger.error(f"❌ All retry attempts failed for process {process_id}")
+    return None
+
 
 # --- Processing Functions ---
 async def process_email_with_delay(
@@ -773,7 +797,7 @@ async def process_email_with_delay(
         parsed_rows = []
         for idx, chunk in enumerate(chunks):
             logger.info(f"Calling Grok API for chunk {idx+1}/{len(chunks)} for UID {email.get('uid', '?')}")
-            parsed = await call_grok_api(prompt_chat, chunk, env, session, process_id)
+            parsed = await call_grok_api_with_retry(prompt_chat, chunk, env, session, process_id)
 
             if parsed is None:
                 logger.warning(f"Grok API returned None for chunk {idx+1} of UID {email.get('uid', '?')}")
