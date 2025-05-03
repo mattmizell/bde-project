@@ -511,42 +511,35 @@ def extract_domain_from_forwarded_headers(content: str, domain_to_supplier: Dict
     return None
 
 def extract_domains_from_body(content: str, domain_to_supplier: Dict[str, str]) -> Optional[str]:
-    """
-    Scan all lines in email body to find company domains (exclude known relay domains)
-    and attempt to match them to known suppliers using exact or fallback domain logic.
-    """
     known_relays = {"outlook.com", "gmail.com", "yahoo.com", "hotmail.com", "icloud.com"}
     seen_domains = set()
-    logger.debug("🔍 Searching for all @-based domains in email body")
+    logger.debug("Searching for all @-based domains in email body")
 
-    matches = re.findall(r'[\w\.-]+@([\w\.-]+\.\w+)', content)
-    logger.debug(f"📬 Found {len(matches)} domain candidates from body content")
+    # NEW: Log first few lines of body content
+    lines = content.splitlines()
+    logger.debug(f"First 10 lines of content:\n" + "\n".join(lines[:10]))
 
-    for match in matches:
+    for match in re.findall(r'[\w\.-]+@([\w\.-]+\.\w+)', content):
         domain = match.lower().strip()
         if domain in known_relays:
-            logger.debug(f"🚫 Skipping known relay domain: {domain}")
             continue
 
-        logger.debug(f"🕵️ Checking domain: {domain}")
-
-        # Exact match
         if domain in domain_to_supplier:
-            logger.info(f"✅ Exact domain match: {domain} → {domain_to_supplier[domain]}")
+            logger.info(f"✅ Matched exact domain in body: {domain}")
             return domain_to_supplier[domain]
 
-        # Fallback match by dropping subdomains
         parts = domain.split('.')
         if len(parts) > 2:
-            base_domain = '.'.join(parts[-2:])  # e.g., mail.wallis.com → wallis.com
+            base_domain = '.'.join(parts[-2:])
             if base_domain in domain_to_supplier:
-                logger.info(f"🔁 Fallback match: {domain} → {base_domain} → {domain_to_supplier[base_domain]}")
+                logger.info(f"✅ Matched fallback domain in body: {base_domain}")
                 return domain_to_supplier[base_domain]
 
         seen_domains.add(domain)
 
     logger.warning(f"❌ No domain match found in body. Domains seen: {seen_domains}")
     return None
+
 
 
 
@@ -594,43 +587,47 @@ def choose_best_content_from_email(msg) -> str:
     return ""
 
 def clean_email_content(content: str) -> str:
-    logger.debug(f"Entering clean_email_content with content length: {len(content)}")
-    try:
-        # Decode email line breaks and cleanup
-        content = content.replace("=\n", "").replace("=20", " ")
-        logger.debug("Removed email line breaks and =20 characters")
+    """
+    Cleans email text to improve parsing while preserving important metadata lines.
+    - Preserves lines with headers like "From:", "To:", "Subject:" and email addresses.
+    - Normalizes tables and spacing for better Grok parsing.
+    """
+    if not content:
+        return ""
 
-        # Remove long dashed lines
-        content = re.sub(r"-{40,}", "", content)
-        logger.debug("Removed long dashes")
+    lines = content.splitlines()
+    preserved_lines = []
+    cleaned_lines = []
 
-        # Reduce large blank gaps
-        content = re.sub(r"\n{3,}", "\n\n", content)
+    for line in lines:
+        stripped = line.strip()
 
-        # Normalize tabular rows that might be missing columns like "CHANGE"
-        lines = content.splitlines()
-        cleaned_lines = []
-        for line in lines:
-            stripped = line.strip()
+        # Preserve metadata lines or lines with email addresses
+        if (
+            stripped.lower().startswith(("from:", "to:", "subject:")) or
+            re.search(r"[\w\.-]+@[\w\.-]+\.\w+", stripped)
+        ):
+            preserved_lines.append(stripped)
+            continue
 
-            # Detect tabular row with comma or hyphen-based terminals + price
-            if re.search(r"(MG|IA|KS)[,\s-]{1,}", stripped) and re.search(r"\d+\.\d{3,4}", stripped):
-                # Normalize multiple spaces/tabs
-                line = re.sub(r"[ \t]{2,}", "\t", line.strip())
-                cleaned_lines.append(line)
-            else:
-                cleaned_lines.append(stripped)
+        # Normalize common encoding artifacts
+        if stripped.endswith("=\n"):
+            stripped = stripped.replace("=\n", "")
+        if "=20" in stripped:
+            stripped = stripped.replace("=20", " ")
 
-        cleaned = "\n".join(cleaned_lines)
-        logger.debug(f"Cleaned content length: {len(cleaned)}")
-        logger.debug(f"Cleaned content (first 500 chars): {cleaned[:500]}...")
-        logger.debug("Exiting clean_email_content")
-        return cleaned
+        # Replace tabs with spaces and normalize whitespace in potential tables
+        if '\t' in stripped or re.search(r'\s{2,}', stripped):
+            stripped = re.sub(r'\s{2,}', '\t', stripped.replace('\t', ' '))
 
-    except Exception as e:
-        logger.error(f"Failed to clean content: {e}")
-        logger.debug("Exiting clean_email_content with original content due to error")
-        return content
+        if stripped and not re.match(r"^[-_=]{5,}$", stripped):
+            cleaned_lines.append(stripped)
+
+    logger.debug("Preserved metadata lines:\n" + "\n".join(preserved_lines[:10]))
+    logger.debug("Cleaned table/body lines:\n" + "\n".join(cleaned_lines[:10]))
+
+    return "\n".join(preserved_lines + cleaned_lines)
+
 
 
 import re
