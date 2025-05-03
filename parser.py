@@ -717,7 +717,7 @@ async def process_email_with_delay(
             raise ValueError("Empty email content")
 
         logger.info(f"Email content length after cleaning: {len(content)} characters")
-        chunks = split_content_into_chunks(content, max_length=6000)
+        chunks = split_content_into_chunks(content, max_chunk_size=6000)
         logger.info(f"Split content into {len(chunks)} chunks")
 
         mappings = load_mappings("mappings.xlsx")
