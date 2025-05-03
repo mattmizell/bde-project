@@ -862,7 +862,7 @@ async def process_email_with_delay(
 from typing import Optional
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict], model: Optional[str] = None) -> None:
-    logger.info(f"Parser.py version: 2025-04-29 with domain_to_supplier fix, API timeout, increased delay, debug logging, and local logging fix")
+    logger.info(f"Parser.py version: 2025-05-02 with model selection, dynamic prompt injection, supply mapping, and full logging")
     file_handler = setup_file_logging(process_id)
 
     try:

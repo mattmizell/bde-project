@@ -36,15 +36,6 @@ async def start_process(request: Request, background_tasks: BackgroundTasks):
     model = request.query_params.get("model", "grok-3")
     logger.info(f"🚀 Received start-process request. Assigned process_id={process_id}, model={model}")
 
-    try:
-        env = load_env()
-        logger.info(f"🌎 Loaded environment from .env: {env}")
-        env["MODEL"] = model
-        logger.info(f"🧠 Overriding MODEL in env to: {env['MODEL']}")
-    except Exception as e:
-        logger.error(f"❌ Failed to load or override environment variables: {e}")
-        raise HTTPException(status_code=500, detail="Environment loading failed")
-
     process_status[process_id] = {
         "status": "starting",
         "email_count": 0,
@@ -56,8 +47,9 @@ async def start_process(request: Request, background_tasks: BackgroundTasks):
     }
 
     logger.info(f"📦 Initialized process status and starting background task for process_id={process_id}")
-    background_tasks.add_task(process_all_emails, process_id, process_status, env)
+    background_tasks.add_task(process_all_emails, process_id, process_status, model)
     return {"process_id": process_id}
+
 
 @app.get("/status/{process_id}")
 async def get_status(process_id: str):
