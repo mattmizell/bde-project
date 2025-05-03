@@ -355,7 +355,10 @@ def resolve_supply(terminal: str, supply_mappings: dict, fuzzy_threshold: int = 
         logger.warning("⚠️ Terminal is missing or invalid; returning Unknown Supply")
         return "Unknown Supply"
 
-    terminal = terminal.strip()
+    if terminal:
+        terminal = terminal.strip()
+    else:
+        terminal = ""
 
     # --- Deterministic Prefix Match ---
     for prefix, supply in supply_mappings.items():
@@ -394,7 +397,7 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
 
     # --- Supply ---
     terminal = row.get("Terminal", "")
-    supply = row.get("Supply", "").strip()
+    supply = str(row.get("Supply", "") or "").strip()
 
     if not supply or supply.lower() == "unknown supply":
         # First try fuzzy/position_holder match
@@ -403,7 +406,10 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
 
         # Then token-based prefix fallback (e.g., FH-MG-KANSAS CITY → FH)
         if not supply or supply.lower() == "unknown supply":
-            prefix_token = terminal.split("-")[0].strip().upper()
+            if terminal:
+                prefix_token = terminal.split("-")[0].strip().upper()
+            else:
+                prefix_token = ""
             supply_from_lookup = mappings.get("supply_lookup", {}).get(prefix_token)
             if supply_from_lookup:
                 supply = supply_from_lookup
