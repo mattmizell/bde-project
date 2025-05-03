@@ -836,6 +836,13 @@ async def process_email_with_delay(
 
 from typing import Optional
 
+#DELAY DELETION OF STATUS
+def schedule_delayed_status_deletion(process_id: str, delay_seconds: int = 300):
+    async def delete_later():
+        await asyncio.sleep(delay_seconds)
+        delete_process_status(process_id)
+    asyncio.create_task(delete_later())
+
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict], model: Optional[str] = None) -> None:
     logger.info(f"Parser.py version: 2025-05-02 with model selection, dynamic prompt injection, supply mapping, and full logging")
     file_handler = setup_file_logging(process_id)
@@ -907,8 +914,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict],
         save_process_status(process_id, process_statuses[process_id])
         logger.info(f"Completed process {process_id} with {total_rows} rows")
 
-        await asyncio.sleep(300)
-        delete_process_status(process_id)
+        schedule_delayed_status_deletion(process_id, delay_seconds=300)
 
     except Exception as e:
         logger.error(f"Error in process_all_emails for process {process_id}: {str(e)}")
