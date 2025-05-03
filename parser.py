@@ -686,12 +686,12 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
         # ✅ Logging details before the call
         logger.info(f"Prompt loaded (first 200 chars): {prompt[:200].replace(chr(10), ' ')}")
         logger.info(f"Content to parse (first 200 chars): {content[:200].replace(chr(10), ' ')}")
-        logger.debug(f"Full prompt:\n{prompt}")
-        logger.debug(f"Full content:\n{content}")
-        logger.debug(f"API payload:\n{json.dumps(payload, indent=2)}")
+        logger.debug(f"🧠 Full prompt:\n{prompt}")
+        logger.debug(f"📄 Full content:\n{content}")
+        logger.debug(f"📦 API payload:\n{json.dumps(payload, indent=2)}")
 
         async def make_request():
-            logger.info(f"Sending POST request to {api_url}")
+            logger.info(f"🔁 Sending POST request to {api_url}")
             async with session.post(api_url, headers=headers, json=payload, timeout=90) as response:
                 logger.info(f"Response status: {response.status}")
                 try:
@@ -701,7 +701,7 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
                     logger.error(f"Grok API error response body: {error_body}")
                     raise e
                 data = await response.json()
-                logger.info(f"Grok API response received for process {process_id}")
+                logger.info(f"✅ Grok API response received for process {process_id}")
                 return data.get("choices", [{}])[0].get("message", {}).get("content", "[]")
 
         timeout = 95  # Increased coroutine timeout
@@ -712,22 +712,21 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
             result = await asyncio.wait_for(make_request(), timeout=timeout)
             end_time = datetime.now()
             logger.info(f"API request end time: {end_time}, duration: {(end_time - start_time).total_seconds()} seconds")
-            logger.info(f"API call completed successfully, result: {result[:200]}...")
+            logger.info(f"✅ API call completed successfully, result: {result[:200]}...")
             return result
         except asyncio.TimeoutError:
-            logger.error(f"Grok API call timed out at coroutine level after {timeout} seconds for process {process_id}")
+            logger.error(f"❌ Grok API call timed out at coroutine level after {timeout} seconds for process {process_id}")
             return None
         except Exception as e:
-            logger.error(f"Unexpected error while waiting for Grok API: {e}")
+            logger.error(f"❌ Unexpected error while waiting for Grok API: {e}")
             return None
 
     except aiohttp.ClientTimeout:
-        logger.error(f"Grok API call timed out at HTTP level after 90 seconds for process {process_id}")
+        logger.error(f"❌ Grok API call timed out at HTTP level after 90 seconds for process {process_id}")
         return None
     except Exception as e:
-        logger.error(f"Grok API call failed for process {process_id}: {e}")
+        logger.error(f"❌ Grok API call failed for process {process_id}: {e}")
         return None
-
 
 
 # --- Processing Functions ---
