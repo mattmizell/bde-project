@@ -753,25 +753,40 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
     # --- Retry Wrapper ---
 
 
-async def call_grok_api_with_retry(
-        prompt: str,
-        content: str,
-        env: Dict[str, str],
-        session: aiohttp.ClientSession,
-        process_id: str,
-        max_retries: int = 3,
-        delay_seconds: int = 10
-) -> Optional[str]:
-    for attempt in range(1, max_retries + 1):
-        logger.info(f"🔁 Grok call attempt {attempt}/{max_retries} for process {process_id}")
-        result = await call_grok_api(prompt, content, env, session, process_id)
-        if result:
-            return result
-        if attempt < max_retries:
-            logger.warning(f"⏳ Retrying in {delay_seconds} seconds...")
-            await asyncio.sleep(delay_seconds)
+def call_grok_api_with_retry(prompt: str, content: str, model: str = "grok-3", max_retries: int = 3, delay: int = 5):
+    """
+    Attempts to send prompt + content to Grok API, retrying with smaller content if it times out.
+    On each retry, the content chunk is halved to increase likelihood of parsing success.
+    """
+    import time
+    from textwrap import dedent
 
-    logger.error(f"❌ All retry attempts failed for process {process_id}")
+    original_lines = content.splitlines()
+    current_lines = original_lines[:]
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            combined = prompt + "\n\n" + "\n".join(current_lines)
+            logger.info(f"📡 Attempt {attempt}: Sending Grok API call (content lines: {len(current_lines)})")
+
+            parsed = call_grok_api(prompt=prompt, content="\n".join(current_lines), model=model)
+
+            if parsed is not None:
+                logger.info(f"✅ Grok API succeeded on attempt {attempt} with {len(current_lines)} lines")
+                return parsed
+            else:
+                logger.warning(f"⚠️ Grok API returned no data on attempt {attempt}")
+        except Exception as e:
+            logger.warning(f"⏰ Grok API attempt {attempt} failed: {e}")
+
+        # Prepare for next retry
+        if attempt < max_retries:
+            logger.info(f"🔁 Retrying in {delay} seconds with smaller chunk...")
+            time.sleep(delay)
+            current_lines = current_lines[: len(current_lines) // 2]
+
+    logger.error("❌ All retry attempts failed for Grok API call")
+    logger.debug(f"🧾 Final content sent to Grok:\n{combined}")
     return None
 
 
