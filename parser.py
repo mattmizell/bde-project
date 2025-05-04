@@ -886,7 +886,7 @@ async def process_email_with_delay(uid, parsed_email, mappings, process_id, mode
 
 
 async def process_all_emails(process_id: str, process_statuses: Dict[str, dict], model: Optional[str] = None) -> None:
-    logger.info("Parser.py version: 2025-05-04 with model passthrough, status tracking, and robust retry logic")
+    logger.info(f"Parser.py version: 2025-05-04 with model passthrough, status tracking, and robust retry logic")
     file_handler = setup_file_logging(process_id)
 
     try:
@@ -896,6 +896,9 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict],
         if model:
             env["MODEL"] = model
             logger.info(f"🧠 Overriding MODEL for this run to: {model}")
+
+        logger.debug("Loading mappings")
+        mappings = load_mappings()  # ✅ Load mappings from Excel
 
         initial_status = {
             "status": "running",
@@ -935,7 +938,16 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict],
                 logger.debug(f"Email details: {email}")
 
                 try:
-                    valid_rows, skipped_rows, failed_email = await process_email_with_delay(email, env, process_id, session=session)
+                    valid_rows, skipped_rows, failed_email = await process_email_with_delay(
+                        uid=email["uid"],
+                        parsed_email=email,
+                        mappings=mappings,  # ✅ Pass actual mappings
+                        process_id=process_id,
+                        model=env["MODEL"],
+                        env=env,
+                        session=session
+                    )
+
                     if valid_rows:
                         save_to_csv(valid_rows, output_file, process_id)
                         total_rows += len(valid_rows)
@@ -946,10 +958,12 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict],
                         failed_email["content"] = email.get("content", "")
                         failed_emails.append(failed_email)
 
-                    await asyncio.sleep(5)
-
                 except Exception as e:
-                    logger.error(f"❌ Error processing email UID {email.get('uid')}: {e}")
+                    logger.error(f"❌ Error processing email UID {email['uid']}: {str(e)}")
+                    failed_email = {"uid": email.get("uid", "unknown"), "error": str(e), "content": email.get("content", "")}
+                    failed_emails.append(failed_email)
+
+                await asyncio.sleep(5)
 
         if failed_emails:
             save_failed_emails_to_csv(failed_emails, output_file, process_id)
