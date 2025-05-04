@@ -935,10 +935,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict],
                 logger.debug(f"Email details: {email}")
 
                 try:
-                    valid_rows, skipped_rows, failed_email = await process_email_with_delay(
-                        email, env, process_id, session
-                    , env, session)
-
+                    valid_rows, skipped_rows, failed_email = await process_email_with_delay(email, env, process_id, session=session)
                     if valid_rows:
                         save_to_csv(valid_rows, output_file, process_id)
                         total_rows += len(valid_rows)
