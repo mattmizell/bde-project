@@ -675,7 +675,6 @@ def fetch_emails(since_days_ago: int = 7) -> List[Dict]:
 
     result, data = mail.search(None, f'(UNSEEN SINCE {date_since})')
     email_uids = data[0].split()
-
     emails = []
 
     for uid in email_uids:
@@ -687,40 +686,41 @@ def fetch_emails(since_days_ago: int = 7) -> List[Dict]:
         subject = raw_email["subject"]
         from_addr = raw_email["from"]
 
-        # NEW: Extract both body and attachment content
         body_content = ""
         attachment_content = ""
 
         for part in raw_email.walk():
             filename = part.get_filename()
+            content_type = part.get_content_type()
+
             if filename and filename.endswith(".txt"):
                 try:
                     attachment_content = part.get_payload(decode=True).decode(errors="ignore").strip()
                     logger.info(f"✅ Extracted .txt attachment: {filename}")
+                    logger.debug(f"Attachment preview: {attachment_content[:500]}...")
                 except Exception as e:
-                    logger.warning(f"Failed to decode attachment {filename}: {e}")
+                    logger.error(f"❌ Failed to decode attachment {filename}: {e}")
 
-        body = raw_email.get_body(preferencelist=("plain"))
-        if body:
-            try:
-                body_content = body.get_content().strip()
-                logger.debug("✅ Extracted plain-text email body.")
-            except Exception as e:
-                logger.warning(f"Failed to extract email body: {e}")
+            elif content_type == "text/plain" and not part.get_filename():
+                try:
+                    body_content = part.get_payload(decode=True).decode(errors="ignore").strip()
+                    logger.debug(f"✅ Extracted plain text body for UID {uid.decode()}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to decode body for UID {uid.decode()}: {e}")
 
         emails.append({
             "uid": uid.decode(),
             "subject": subject,
             "from_addr": from_addr,
-            "content": attachment_content if attachment_content else body_content,
-            "raw_email": raw_email,
             "body": body_content,
-            "attachment": attachment_content
+            "attachment": attachment_content,
+            "raw_email": raw_email
         })
 
     mail.logout()
     logger.debug("Exiting fetch_emails")
     return emails
+
 
 
 
@@ -811,41 +811,27 @@ async def call_grok_api_with_retry(
 
 
 # --- Processing Functions ---
-async def process_email_with_delay(
-    email: Dict[str, str],
-    env: Dict[str, str],
-    process_id: str,
-    session: aiohttp.ClientSession
-) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
-
+async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str, session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
     logger.debug(f"Entering process_email_with_delay for UID {email.get('uid', '?')} in process {process_id}")
-    logger.debug(f"📨 Raw email content for UID {email.get('uid')} (first 500 chars):\n{email.get('content', '')[:500]}")
     valid_rows = []
     skipped_rows = []
     failed_email = None
 
     try:
-        raw_body = email.get("body", "")           # used for sender/supplier detection
-        raw_content = email.get("content", "")     # used for Grok parsing
+        body_text = email.get("body", "")
+        attachment_text = email.get("attachment", "")
+        raw_body = body_text or ""  # used for domain detection
+        parsing_source = attachment_text or body_text or ""
+        if not parsing_source:
+            raise ValueError("Empty email content from both body and attachment")
 
-        if not raw_content:
-            raise ValueError("Empty email content")
-
-        if email.get("attachment"):
-            logger.debug(f"📎 Using .txt attachment for Grok content (UID: {email.get('uid')})")
-        else:
-            logger.debug(f"📝 Using email body content for Grok (UID: {email.get('uid')})")
-
-        content = clean_email_content(raw_content)
+        content = clean_email_content(parsing_source)
         logger.info(f"Email content length after cleaning: {len(content)} characters")
         chunks = split_content_into_chunks(content, max_chunk_size=6000)
         logger.info(f"Split content into {len(chunks)} chunks")
 
         mappings = load_mappings("mappings.xlsx")
         domain_to_supplier = {k.strip().lower(): v.strip() for k, v in mappings.get("domain_to_supplier", {}).items()}
-
-        logger.debug(f"domain_to_supplier mapping loaded with {len(domain_to_supplier)} entries")
-        logger.debug(f"Example entries: {list(domain_to_supplier.items())[:5]}")
 
         content_lower = content.lower()
         subject_lower = email.get("subject", "").lower()
