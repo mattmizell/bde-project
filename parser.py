@@ -873,14 +873,22 @@ async def process_email_with_delay(uid, parsed_email, mappings, process_id, mode
     all_results = []
     for i, chunk in enumerate(chunks, 1):
         logger.info(f"🚀 Sending chunk {i} of {len(chunks)} to Grok ({len(chunk)} characters)")
-        parsed = call_grok_api_with_retry(prompt_chat, chunk, model=model)
-        if parsed:
-            logger.info(f"✅ Received {len(parsed)} parsed rows from chunk {i}")
-            all_results.extend(parsed)
+        parsed_text = call_grok_api_with_retry(prompt_chat, chunk, model=model)
+
+        if parsed_text:
+            logger.debug(f"📥 Raw Grok response for chunk {i}:\n{parsed_text[:1000]}")
+            try:
+                parsed_rows = json.loads(parsed_text)
+                if isinstance(parsed_rows, list):
+                    all_results.extend(parsed_rows)
+                    logger.info(f"✅ Received {len(parsed_rows)} parsed rows from chunk {i}")
+                else:
+                    logger.warning(f"❌ Expected list but got {type(parsed_rows)} for chunk {i}")
+            except Exception as e:
+                logger.error(f"❌ Failed to parse JSON from Grok output for chunk {i}: {e}")
+                logger.debug(f"🧾 Grok output was:\n{parsed_text}")
         else:
             logger.warning(f"❌ Grok API returned None for chunk {i} of UID {uid}")
-
-    logger.info(f"📊 Total parsed rows across all chunks: {len(all_results)} for UID {uid}")
     return all_results
 
 
