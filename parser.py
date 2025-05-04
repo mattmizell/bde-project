@@ -1,4 +1,5 @@
 import re
+import email
 from difflib import get_close_matches
 
 def regex_extract(pattern, text, flags=0):
@@ -10,7 +11,6 @@ def fuzzy_match(value, options, cutoff=0.8):
     return matches[0] if matches else None
 
 import os
-import re
 import imaplib
 import aiohttp
 import asyncio
@@ -26,6 +26,7 @@ from email.parser import BytesParser
 from rapidfuzz import fuzz
 import logging
 
+from email import policy
 # Trigger render redeploy
 # --- Config ---
 BASE_DIR: Path = Path(__file__).parent
@@ -560,21 +561,26 @@ def choose_best_content_from_email(msg) -> str:
             try:
                 content = part.get_payload(decode=True).decode(errors="ignore")
                 if content.strip():
+                    content = clean_email_content(content)
                     logger.info(f"Using .txt attachment: {filename}")
                     logger.debug(f"Content extracted from attachment: {content[:500]}...")
                     logger.debug("Exiting choose_best_content_from_email with .txt content")
                     return content
             except Exception as e:
                 logger.error(f"Failed to decode attachment {filename}: {e}")
+
     body = msg.get_body(preferencelist=("plain"))
     if body:
         content = body.get_content().strip()
+        content = clean_email_content(content)
         logger.debug(f"Content extracted from email body: {content[:500]}...")
         logger.debug("Exiting choose_best_content_from_email with body content")
         return content
+
     logger.debug("No suitable content found, returning empty string")
-    logger.debug("Exiting choose_best_content_from_email")
     return ""
+
+
 
 def clean_email_content(content: str) -> str:
     """
@@ -654,48 +660,45 @@ def split_content_into_chunks(content: str, max_chunk_size: int = 2000) -> List[
 
 
 # --- IMAP Functions ---
-def fetch_emails(env: Dict[str, str], process_id: str) -> List[Dict[str, str]]:
-    logger.debug(f"Entering fetch_emails for process {process_id}")
+def fetch_emails(since_days_ago: int = 7) -> List[Dict]:
+    logger.debug("Entering fetch_emails")
+    env = load_env()
+    imap_server = env["IMAP_SERVER"]
+    imap_user = env["IMAP_USERNAME"]
+    imap_password = env["IMAP_PASSWORD"]
+
+    date_since = (datetime.now() - timedelta(days=since_days_ago)).strftime("%d-%b-%Y")
+
+    mail = imaplib.IMAP4_SSL(imap_server)
+    mail.login(imap_user, imap_password)
+    mail.select("inbox")
+
+    result, data = mail.search(None, f'(UNSEEN SINCE {date_since})')
+    email_uids = data[0].split()
+
     emails = []
-    try:
-        logger.debug(f"Connecting to IMAP server: {env['IMAP_SERVER']}")
-        imap_server = imaplib.IMAP4_SSL(env["IMAP_SERVER"])
-        logger.debug("Logging into IMAP server")
-        imap_server.login(env["IMAP_USERNAME"], env["IMAP_PASSWORD"])
-        logger.debug("Selecting INBOX")
-        imap_server.select("INBOX")
 
-        since_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
-        logger.debug(f"Searching for unseen emails since {since_date}")
-        _, msg_nums = imap_server.search(None, f'(SINCE "{since_date}") UNSEEN')
-        msg_nums_list = msg_nums[0].split()
-        logger.info(f"Found {len(msg_nums_list)} unseen emails since {since_date}")
+    for uid in email_uids:
+        result, data = mail.fetch(uid, "(RFC822)")
+        if result != "OK":
+            continue
 
-        for num in msg_nums_list:
-            logger.debug(f"Fetching email UID {num.decode()}")
-            _, data = imap_server.fetch(num, "(RFC822)")
-            msg = BytesParser(policy=policy.default).parsebytes(data[0][1])
-            content = choose_best_content_from_email(msg)
-            subject = msg.get("Subject", "").strip()
-            from_addr = msg.get("From", "").strip()
-            logger.debug(
-                f"Email UID {num.decode()}: Subject={subject}, From={from_addr}, Content length={len(content)}")
-            if content:
-                emails.append({
-                    "uid": num.decode(),
-                    "content": content,
-                    "subject": subject,
-                    "from_addr": from_addr,
-                })
-                logger.debug(f"Added email UID {num.decode()} to list")
 
-        logger.debug("Logging out of IMAP server")
-        imap_server.logout()
+        raw_email = email.message_from_bytes(data[0][1], policy=policy.default)
 
-    except Exception as e:
-        logger.error(f"Failed to fetch emails: {e}")
+        subject = raw_email["subject"]
+        from_addr = raw_email["from"]
 
-    logger.info(f"Fetched {len(emails)} emails for process {process_id}")
+        content = choose_best_content_from_email(raw_email)
+        emails.append({
+            "uid": uid.decode(),
+            "subject": subject,
+            "from_addr": from_addr,
+            "content": content,
+            "raw_email": raw_email
+        })
+
+    mail.logout()
     logger.debug("Exiting fetch_emails")
     return emails
 
