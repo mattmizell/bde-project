@@ -845,6 +845,69 @@ async def call_grok_api_with_retry(
 
 
 # --- Processing Functions ---
+async def run_grok_with_recursive_chunking(prompt, chunk, env, session, process_id, max_depth=3):
+    parsed_rows = []
+    try:
+        raw = await call_grok_api_with_retry(prompt, chunk, env, session, process_id)
+        if raw is None:
+            logger.warning(f"Grok returned None for chunk in process {process_id}")
+            return []
+
+        if raw.startswith("```json"):
+            raw = re.sub(r"```json|```", "", raw, flags=re.DOTALL).strip()
+
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+        else:
+            raise ValueError("Parsed response is not a list")
+
+    except Exception as ex:
+        logger.warning(f"Failed to parse Grok response. Error: {ex}")
+        if max_depth > 0:
+            midpoint = len(chunk) // 2
+            chunk1, chunk2 = chunk[:midpoint], chunk[midpoint:]
+            logger.info("🪓 Recursively splitting chunk due to parse error")
+            results1 = await run_grok_with_recursive_chunking(prompt, chunk1, env, session, process_id, max_depth-1)
+            results2 = await run_grok_with_recursive_chunking(prompt, chunk2, env, session, process_id, max_depth-1)
+            return results1 + results2
+        else:
+            logger.error("❌ Max recursion depth reached; skipping chunk")
+            return []
+
+async def run_grok_with_recursive_chunking(prompt: str, chunk: str, env: Dict[str, str], session: aiohttp.ClientSession, process_id: str, depth: int = 0) -> List[Dict]:
+    if depth > 3:
+        logger.error(f"🚫 Max recursion depth reached for chunk in process {process_id}")
+        return []
+
+    logger.info(f"🧪 Attempting Grok parse (depth {depth}) for chunk of length {len(chunk)}")
+    result = await call_grok_api_with_retry(prompt, chunk, env, session, process_id)
+
+    if not result:
+        logger.warning(f"❌ Grok returned no result at depth {depth} — attempting to split")
+    else:
+        try:
+            if result.startswith("```json"):
+                result = re.sub(r"```json|```", "", result, flags=re.DOTALL).strip()
+            parsed = json.loads(result)
+            if isinstance(parsed, list) and parsed:
+                return parsed
+        except Exception as e:
+            logger.warning(f"🛑 Failed to parse Grok result at depth {depth}: {e}")
+
+    # Split and retry recursively
+    midpoint = len(chunk) // 2
+    chunk1, chunk2 = chunk[:midpoint], chunk[midpoint:]
+
+    logger.warning(f"✂️ Splitting failed chunk into 2 sub-chunks at depth {depth}")
+    logger.debug(f"🔍 Sub-chunk 1 preview (first 300 chars):\n{chunk1[:300]}")
+    logger.debug(f"🔍 Sub-chunk 2 preview (first 300 chars):\n{chunk2[:300]}")
+
+    rows1 = await run_grok_with_recursive_chunking(prompt, chunk1, env, session, process_id, depth + 1)
+    rows2 = await run_grok_with_recursive_chunking(prompt, chunk2, env, session, process_id, depth + 1)
+
+    return rows1 + rows2
+
 async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], process_id: str, session: aiohttp.ClientSession) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
     logger.debug(f"Entering process_email_with_delay for UID {email.get('uid', '?')} in process {process_id}")
     valid_rows = []
@@ -861,7 +924,8 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
         content = clean_email_content(parsing_source)
         logger.info(f"Email content length after cleaning: {len(content)} characters")
-        chunks = split_content_into_chunks(content, max_chunk_size=6000)
+        chunks = split_content_into_chunks(content, max_chunk_size=4000)
+        logger.info(f"⚙️ Using reduced chunk size of 4000 for safer Grok parsing")
         logger.info(f"Split content into {len(chunks)} chunks")
 
         mappings = load_mappings("mappings.xlsx")
@@ -913,25 +977,18 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         for idx, chunk in enumerate(chunks):
             logger.info(f"Calling Grok API for chunk {idx+1}/{len(chunks)} for UID {email.get('uid', '?')}")
             logger.debug(f"Prompt being sent to Grok for UID {email.get('uid')}:\n{prompt_chat}\n---\nChunk:\n{chunk}")
-            parsed = await call_grok_api_with_retry(prompt_chat, chunk, env, session, process_id)
 
-            if parsed is None:
-                logger.warning(f"Grok API returned None for chunk {idx+1} of UID {email.get('uid', '?')}")
+            rows = await run_grok_with_recursive_chunking(prompt_chat, chunk, env, session, process_id)
+            if not rows:
+                logger.warning(f"⚠️ No valid rows parsed from chunk {idx+1} of UID {email.get('uid', '?')}")
                 continue
 
-            if parsed.startswith("```json"):
-                parsed = re.sub(r"```json|```", "", parsed, flags=re.DOTALL).strip()
-
-            try:
-                rows = json.loads(parsed)
-                if not isinstance(rows, list):
-                    raise ValueError(f"Grok response not a list for chunk {idx+1}")
-                parsed_rows.extend(rows)
-            except Exception as ex:
-                logger.error(f"Failed to parse Grok response for chunk {idx+1}: {ex}")
-                continue
+            parsed_rows.extend(rows)
 
         logger.info(f"Total parsed rows across all chunks: {len(parsed_rows)} for UID {email.get('uid', '?')}")
+        if len(parsed_rows) < 25:
+            logger.warning(
+                f"⚠️ Parsed row count seems low ({len(parsed_rows)}) for UID {email.get('uid', '?')}. Content length: {len(content)}. Consider reprocessing.")
 
         for row in parsed_rows:
             if not isinstance(row, dict):
@@ -964,7 +1021,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
         if valid_rows:
             mark_email_as_processed(email.get("uid", ""), env)
-            logger.info(f"Parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
+            logger.info(f"✅ Parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
 
     except Exception as ex:
         failed_email = {
@@ -977,6 +1034,7 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
     logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
     return valid_rows, skipped_rows, failed_email
+
 
 
 
