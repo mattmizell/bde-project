@@ -966,7 +966,8 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict],
         logger.info(f"Started process {process_id}, saved initial status")
 
         logger.debug("Fetching emails")
-        emails = fetch_emails(env, process_id)
+        logger.debug(f"Starting fetch_emails for process_id={process_id}, model={model}")
+        emails = fetch_emails()
         process_statuses[process_id]["email_count"] = len(emails)
         save_process_status(process_id, process_statuses[process_id])
         logger.info(f"Fetched {len(emails)} emails for process {process_id}")
