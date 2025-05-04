@@ -753,24 +753,31 @@ async def call_grok_api(prompt: str, content: str, env: Dict[str, str], session:
     # --- Retry Wrapper ---
 
 
-def call_grok_api_with_retry(prompt: str, content: str, model: str = "grok-3", max_retries: int = 3, delay: int = 5):
+async def call_grok_api_with_retry(
+    prompt: str,
+    content: str,
+    env: Dict[str, str],
+    session: aiohttp.ClientSession,
+    process_id: str,
+    max_retries: int = 3,
+    delay: int = 5
+) -> Optional[str]:
     """
-    Attempts to send prompt + content to Grok API, retrying with smaller content if it times out.
-    On each retry, the content chunk is halved to increase likelihood of parsing success.
+    Retry Grok API calls up to max_retries. On failure, reduce chunk size and retry.
     """
-    import time
-    from textwrap import dedent
-
     original_lines = content.splitlines()
     current_lines = original_lines[:]
 
     for attempt in range(1, max_retries + 1):
         try:
-            combined = prompt + "\n\n" + "\n".join(current_lines)
-            logger.info(f"📡 Attempt {attempt}: Sending Grok API call (content lines: {len(current_lines)})")
-
-            parsed = call_grok_api(prompt=prompt, content="\n".join(current_lines), model=model)
-
+            logger.info(f"📡 Attempt {attempt}: Sending Grok API call (lines: {len(current_lines)})")
+            parsed = await call_grok_api(
+                prompt=prompt,
+                content="\n".join(current_lines),
+                env=env,
+                session=session,
+                process_id=process_id
+            )
             if parsed is not None:
                 logger.info(f"✅ Grok API succeeded on attempt {attempt} with {len(current_lines)} lines")
                 return parsed
@@ -779,15 +786,14 @@ def call_grok_api_with_retry(prompt: str, content: str, model: str = "grok-3", m
         except Exception as e:
             logger.warning(f"⏰ Grok API attempt {attempt} failed: {e}")
 
-        # Prepare for next retry
         if attempt < max_retries:
-            logger.info(f"🔁 Retrying in {delay} seconds with smaller chunk...")
-            time.sleep(delay)
+            logger.info(f"🔁 Retrying in {delay} seconds with reduced chunk size")
+            await asyncio.sleep(delay)
             current_lines = current_lines[: len(current_lines) // 2]
 
     logger.error("❌ All retry attempts failed for Grok API call")
-    logger.debug(f"🧾 Final content sent to Grok:\n{combined}")
     return None
+
 
 
 # --- Processing Functions ---
@@ -830,7 +836,7 @@ def split_content_for_grok(content: str, max_chars: int = 3000) -> List[str]:
     return chunks
 
 
-async def process_email_with_delay(uid, parsed_email, mappings, process_id, model, env, session):
+async def process_email_with_delay(uid, parsed_email, mappings, process_id, model):
     logger.info(f"✉️ Processing UID: {uid}")
 
     email_body = extract_email_body(parsed_email)
@@ -873,7 +879,7 @@ async def process_email_with_delay(uid, parsed_email, mappings, process_id, mode
     all_results = []
     for i, chunk in enumerate(chunks, 1):
         logger.info(f"🚀 Sending chunk {i} of {len(chunks)} to Grok ({len(chunk)} characters)")
-        parsed = call_grok_api_with_retry(prompt_chat, chunk, model=model)
+        parsed = await call_grok_api_with_retry(prompt_chat, chunk, model=model)
         if parsed:
             logger.info(f"✅ Received {len(parsed)} parsed rows from chunk {i}")
             all_results.extend(parsed)
@@ -937,7 +943,7 @@ async def process_all_emails(process_id: str, process_statuses: Dict[str, dict],
                 try:
                     valid_rows, skipped_rows, failed_email = await process_email_with_delay(
                         email, env, process_id, session
-                    , env, session)
+                    )
 
                     if valid_rows:
                         save_to_csv(valid_rows, output_file, process_id)
