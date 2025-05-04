@@ -683,24 +683,45 @@ def fetch_emails(since_days_ago: int = 7) -> List[Dict]:
         if result != "OK":
             continue
 
-
         raw_email = email.message_from_bytes(data[0][1], policy=policy.default)
-
         subject = raw_email["subject"]
         from_addr = raw_email["from"]
 
-        content = choose_best_content_from_email(raw_email)
+        # NEW: Extract both body and attachment content
+        body_content = ""
+        attachment_content = ""
+
+        for part in raw_email.walk():
+            filename = part.get_filename()
+            if filename and filename.endswith(".txt"):
+                try:
+                    attachment_content = part.get_payload(decode=True).decode(errors="ignore").strip()
+                    logger.info(f"✅ Extracted .txt attachment: {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to decode attachment {filename}: {e}")
+
+        body = raw_email.get_body(preferencelist=("plain"))
+        if body:
+            try:
+                body_content = body.get_content().strip()
+                logger.debug("✅ Extracted plain-text email body.")
+            except Exception as e:
+                logger.warning(f"Failed to extract email body: {e}")
+
         emails.append({
             "uid": uid.decode(),
             "subject": subject,
             "from_addr": from_addr,
-            "content": content,
-            "raw_email": raw_email
+            "content": attachment_content if attachment_content else body_content,
+            "raw_email": raw_email,
+            "body": body_content,
+            "attachment": attachment_content
         })
 
     mail.logout()
     logger.debug("Exiting fetch_emails")
     return emails
+
 
 
 def mark_email_as_processed(uid: str, env: Dict[str, str]) -> None:
@@ -804,11 +825,18 @@ async def process_email_with_delay(
     failed_email = None
 
     try:
-        raw_body = email.get("content", "")
-        if not raw_body:
+        raw_body = email.get("body", "")           # used for sender/supplier detection
+        raw_content = email.get("content", "")     # used for Grok parsing
+
+        if not raw_content:
             raise ValueError("Empty email content")
 
-        content = clean_email_content(raw_body)
+        if email.get("attachment"):
+            logger.debug(f"📎 Using .txt attachment for Grok content (UID: {email.get('uid')})")
+        else:
+            logger.debug(f"📝 Using email body content for Grok (UID: {email.get('uid')})")
+
+        content = clean_email_content(raw_content)
         logger.info(f"Email content length after cleaning: {len(content)} characters")
         chunks = split_content_into_chunks(content, max_chunk_size=6000)
         logger.info(f"Split content into {len(chunks)} chunks")
@@ -929,6 +957,7 @@ async def process_email_with_delay(
 
     logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
     return valid_rows, skipped_rows, failed_email
+
 
 
 from typing import Optional
