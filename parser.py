@@ -791,145 +791,91 @@ def call_grok_api_with_retry(prompt: str, content: str, model: str = "grok-3", m
 
 
 # --- Processing Functions ---
-async def process_email_with_delay(
-    email: Dict[str, str],
-    env: Dict[str, str],
-    process_id: str,
-    session: aiohttp.ClientSession
-) -> Tuple[List[Dict], List[Dict], Optional[Dict]]:
 
-    logger.debug(f"Entering process_email_with_delay for UID {email.get('uid', '?')} in process {process_id}")
-    logger.debug(f"📨 Raw email content for UID {email.get('uid')} (first 500 chars):\n{email.get('content', '')[:500]}")
-    valid_rows = []
-    skipped_rows = []
-    failed_email = None
+def extract_email_body(email_obj) -> str:
+    """Extracts the plain text body from a parsed email."""
+    for part in email_obj.walk():
+        if part.get_content_type() == "text/plain":
+            return part.get_payload(decode=True).decode(errors="ignore")
+    return ""
 
-    try:
-        raw_body = email.get("content", "")
-        if not raw_body:
-            raise ValueError("Empty email content")
+def extract_txt_attachment(email_obj) -> Optional[str]:
+    """Returns the content of the first .txt attachment."""
+    for part in email_obj.walk():
+        if part.get_filename() and part.get_filename().lower().endswith(".txt"):
+            return part.get_payload(decode=True).decode(errors="ignore")
+    return None
 
-        content = clean_email_content(raw_body)
-        logger.info(f"Email content length after cleaning: {len(content)} characters")
-        chunks = split_content_into_chunks(content, max_chunk_size=6000)
-        logger.info(f"Split content into {len(chunks)} chunks")
+def split_content_for_grok(content: str, max_chars: int = 3000) -> List[str]:
+    """Split content into safe chunks for Grok API."""
+    lines = content.splitlines()
+    chunks, current_chunk = [], []
 
-        mappings = load_mappings("mappings.xlsx")
-        domain_to_supplier = {k.strip().lower(): v.strip() for k, v in mappings.get("domain_to_supplier", {}).items()}
+    for line in lines:
+        current_chunk.append(line)
+        if sum(len(l) for l in current_chunk) > max_chars:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = []
 
-        logger.debug(f"domain_to_supplier mapping loaded with {len(domain_to_supplier)} entries")
-        logger.debug(f"Example entries: {list(domain_to_supplier.items())[:5]}")
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
 
-        content_lower = content.lower()
-        subject_lower = email.get("subject", "").lower()
-        is_opis = ("opis" in content_lower and ("rack" in content_lower or "wholesale" in content_lower)) or \
-                  ("opis" in subject_lower and ("rack" in subject_lower or "wholesale" in subject_lower))
+    return chunks
 
-        prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
-        prompt_chat = load_prompt(prompt_file)
 
-        if not is_opis:
-            prompt_chat += "\n\n" + supply_examples_prompt_block(mappings.get("position_holders", {}))
-            prompt_chat += "\n\n" + supply_lookup_prompt_block(mappings.get("supply_lookup", {}))
-            prompt_chat += "\n\n" + terminal_mapping_prompt_block(mappings.get("terminals", {}))
+async def process_email_with_delay(uid, parsed_email, mappings, process_id, model):
+    logger.info(f"✉️ Processing UID: {uid}")
 
-        email_from = email.get("from_addr", "")
-        supplier = None
+    email_body = extract_email_body(parsed_email)
 
-        if email_from:
-            match = re.search(r"[\w\.-]+@([\w\.-]+)", email_from)
-            if match:
-                domain = match.group(1).strip().lower()
-                logger.info(f"Parsed domain from from_addr: {domain}")
-                supplier = domain_to_supplier.get(domain)
-                if not supplier:
-                    logger.warning(f"Domain '{domain}' not found in domain_to_supplier. Attempting fuzzy match...")
-                    for known_domain, known_supplier in domain_to_supplier.items():
-                        if domain.endswith(known_domain):
-                            supplier = known_supplier
-                            logger.info(f"Fuzzy matched supplier '{supplier}' for domain '{domain}' using known '{known_domain}'")
-                            break
+    # 🧠 Always detect supplier from the email body
+    detected_supplier = extract_domain_from_forwarded_headers(email_body, mappings["domain_to_supplier"])
+    if not detected_supplier:
+        logger.info("🔁 Falling back to full body domain scan...")
+        detected_supplier = extract_domains_from_body(email_body, mappings["domain_to_supplier"])
 
-        if not supplier:
-            logger.debug("Trying extract_domain_from_forwarded_headers()...")
-            supplier = extract_domain_from_forwarded_headers(raw_body, domain_to_supplier)
+    supplier = detected_supplier if detected_supplier else "Unknown Supplier"
+    logger.info(f"📨 Supplier determined: {supplier}")
 
-        if not supplier:
-            logger.debug("Trying extract_domains_from_body()...")
-            supplier = extract_domains_from_body(raw_body, domain_to_supplier)
+    # 🔍 Choose content source (.txt attachment or body)
+    attachment_text = extract_txt_attachment(parsed_email)
+    if attachment_text:
+        content_to_parse = clean_email_content(attachment_text)
+        logger.info("📎 Using .txt attachment content")
+    else:
+        content_to_parse = clean_email_content(email_body)
+        logger.info("📨 Using email body content")
 
-        if not supplier:
-            supplier = "Unknown Supplier"
-            logger.warning(f"No supplier identified for UID {email.get('uid', '?')}, defaulting to Unknown Supplier")
+    # 🧠 Load appropriate prompt (OPIS vs Supplier)
+    is_opis = "opis" in supplier.lower()
+    prompt_path = "prompts/opis_chat_prompt.txt" if is_opis else "prompts/supplier_chat_prompt.txt"
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        prompt_chat = f.read()
 
-        parsed_rows = []
-        for idx, chunk in enumerate(chunks):
-            logger.info(f"Calling Grok API for chunk {idx+1}/{len(chunks)} for UID {email.get('uid', '?')}")
-            logger.debug(f"Prompt being sent to Grok for UID {email.get('uid')}:\n{prompt_chat}\n---\nChunk:\n{chunk}")
-            parsed = await call_grok_api_with_retry(prompt_chat, chunk, env, session, process_id)
+    # ✨ Inject mapping prompt blocks
+    prompt_chat += "\n\n" + supply_examples_prompt_block(mappings.get("position_holders", {}))
+    prompt_chat += "\n\n" + supply_lookup_prompt_block(mappings.get("supply_lookup", {}))
+    prompt_chat += "\n\n" + terminal_mapping_prompt_block(mappings.get("terminals", {}))
 
-            if parsed is None:
-                logger.warning(f"Grok API returned None for chunk {idx+1} of UID {email.get('uid', '?')}")
-                continue
+    logger.debug("📥 Final prompt assembled for Grok")
+    logger.debug(prompt_chat)
 
-            if parsed.startswith("```json"):
-                parsed = re.sub(r"```json|```", "", parsed, flags=re.DOTALL).strip()
+    # 📦 Chunk content (if necessary)
+    chunks = split_content_for_grok(content_to_parse)
 
-            try:
-                rows = json.loads(parsed)
-                if not isinstance(rows, list):
-                    raise ValueError(f"Grok response not a list for chunk {idx+1}")
-                parsed_rows.extend(rows)
-            except Exception as ex:
-                logger.error(f"Failed to parse Grok response for chunk {idx+1}: {ex}")
-                continue
+    all_results = []
+    for i, chunk in enumerate(chunks, 1):
+        logger.info(f"🚀 Sending chunk {i} of {len(chunks)} to Grok ({len(chunk)} characters)")
+        parsed = call_grok_api_with_retry(prompt_chat, chunk, model=model)
+        if parsed:
+            logger.info(f"✅ Received {len(parsed)} parsed rows from chunk {i}")
+            all_results.extend(parsed)
+        else:
+            logger.warning(f"❌ Grok API returned None for chunk {i} of UID {uid}")
 
-        logger.info(f"Total parsed rows across all chunks: {len(parsed_rows)} for UID {email.get('uid', '?')}")
+    logger.info(f"📊 Total parsed rows across all chunks: {len(all_results)} for UID {uid}")
+    return all_results
 
-        for row in parsed_rows:
-            if not isinstance(row, dict):
-                continue
-            if not row.get("Product Name") or not row.get("Terminal") or not isinstance(row.get("Price"), (int, float)):
-                continue
-
-            price = row.get("Price", 0)
-            if price > 5:
-                price = price / 100
-                row["Price"] = price
-            if price > 5:
-                continue
-
-            if not is_opis and not row.get("Supplier"):
-                row["Supplier"] = supplier
-
-            row = apply_mappings(row, mappings, is_opis, email_from=supplier)
-
-            valid_rows.append({
-                "Supplier": row.get("Supplier", ""),
-                "Supply": row.get("Supply", ""),
-                "Product Name": row.get("Product Name", ""),
-                "Terminal": row.get("Terminal", ""),
-                "Price": row.get("Price", 0),
-                "Volume Type": row.get("Volume Type", ""),
-                "Effective Date": row.get("Effective Date", ""),
-                "Effective Time": row.get("Effective Time", ""),
-            })
-
-        if valid_rows:
-            mark_email_as_processed(email.get("uid", ""), env)
-            logger.info(f"Parsed {len(valid_rows)} valid rows from email UID {email.get('uid', '?')}")
-
-    except Exception as ex:
-        failed_email = {
-            "email_id": email.get("uid", "?"),
-            "subject": email.get("subject", ""),
-            "from_addr": email.get("from_addr", ""),
-            "error": str(ex),
-        }
-        logger.error(f"Failed to process email UID {email.get('uid', '?')}: {str(ex)}")
-
-    logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
-    return valid_rows, skipped_rows, failed_email
 
 
 from typing import Optional
