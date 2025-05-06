@@ -748,7 +748,7 @@ async def call_grok_api(
         }
 
         logger.info(f"📡 Sending POST request to Grok API for process {process_id}")
-        async with session.post(GROK_API_URL, headers=headers, json=payload, timeout=95) as response:
+        async with session.post(GROK_API_URL, headers=headers, json=payload, timeout=120) as response:
             logger.info(f"📥 Grok API HTTP status: {response.status}")
             response_text = await response.text()
 
@@ -866,8 +866,8 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
         content = clean_email_content(parsing_source)
         logger.info(f"Email content length after cleaning: {len(content)} characters")
-        chunks = split_content_into_chunks(content, max_chunk_size=4000)
-        logger.info(f"⚙️ Using reduced chunk size of 4000 for safer Grok parsing")
+        chunks = split_content_into_chunks(content, max_chunk_size=20000)
+        logger.info(f"⚙️ Using increased chunk size of 20000 for Grok parsing")
         logger.info(f"Split content into {len(chunks)} chunks")
 
         mappings = load_mappings("mappings.xlsx")
