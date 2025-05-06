@@ -1103,7 +1103,7 @@ def save_to_csv(data: List[Dict], output_filename: str, process_id: str) -> None
         mode = "a" if output_path.exists() else "w"
         logger.debug(f"Opening file {output_path} in mode {mode}")
         with open(output_path, mode, newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             if mode == "w":
                 logger.debug("Writing CSV header")
                 writer.writeheader()
