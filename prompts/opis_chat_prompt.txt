@@ -38,6 +38,59 @@ When terminal names are ambiguous, inconsistent, or abbreviated, use the followi
 - If a section is malformed and unclear, **skip it** rather than guessing.
 - Prices above `5.00` are usually valid. Prices below `0.50` are suspicious and should be skipped unless clearly meant.
 
+##Terminal extraction guidance
+
+⚠️ Important: Do **not** default to the location in the header (e.g., "St. Louis, MO" at the top of the file). That is the publisher's location — not the terminal.
+
+Only extract the **Terminal** from the product/pricing section if a clear location appears **near the pricing block** (e.g., "Hartford", "East St. Louis", etc.).
+
+If no terminal is clearly mentioned in or near the row, leave it blank.
+
+**Terminal** comes from the terminal section heading. This usually appears as a bold or capitalized line before a group of Position Holders. For example:
+  - `ST. LOUIS, MO TERMINAL`
+  - `HARTFORD IL TERMINAL`
+- Always associate each block of prices with the terminal heading closest above it.
+- If no terminal heading is present, and it's not a continuation of a prior known terminal section, skip the rows. Do **not** assume a terminal like “St. Louis” by default.
+- If formatting is unclear, extract only rows where you are confident the Terminal is identified.
+
+---
+
+✅ Example 1 — Correct Terminal
+
+Raw input block:
+**OPIS GROSS ULTRA LOW SULFUR DIESEL PRICES**
+
+Hartford
+
+SHELL                 2.0810  
+MARATHON              2.0790
+
+Parsed rows:
+{
+  "Supply": "Shell",
+  "Product Name": "ULTRA LOW SULFUR DIESEL",
+  "Terminal": "IL Hartford",
+  ...
+}
+
+---
+
+✅ Example 2 — No Terminal Given
+
+Raw input block:
+**OPIS GROSS CBOB ETHANOL(10%) PRICES**
+
+SHELL                 2.1050  
+MARATHON              2.1080
+
+Parsed rows:
+{
+  "Supply": "Shell",
+  "Product Name": "CBOB ETHANOL(10%)",
+  "Terminal": "",
+  ...
+}
+
 # Expected Output Format
 
 
