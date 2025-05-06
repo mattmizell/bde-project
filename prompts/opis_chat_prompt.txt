@@ -27,6 +27,16 @@ You are an expert assistant tasked with extracting structured petroleum rack pri
 ---
 
 # Terminal Extraction Guidance (Expanded)
+OPIS rack pricing reports often use terminal codes to represent fuel terminal locations. These codes are structured with supplier or pipeline prefixes followed by the location name.
+
+For example:
+- "FH-MG-KANSAS CITY" indicates the **Magellan terminal in Kansas City**.
+- "FH-CH-TULSA" refers to the **Chevron terminal in Tulsa**.
+- "FH-MG-EL DORADO" represents the **Magellan terminal in El Dorado**.
+
+Please extract the full terminal name from these codes, using known mappings where possible. If a mapping is not available, extract the most meaningful location or terminal name portion (e.g., “KANSAS CITY”, “TULSA”).
+
+You may use the terminal prefix to assist with identifying the pipeline or supply network, but the main goal is to extract and standardize the terminal **location name**.
 
 ⚠️ Do NOT default to "St. Louis, MO" from the header.
 - "St. Louis, MO" appears at the top of many reports and near each product header as the publisher location, not the terminal.
