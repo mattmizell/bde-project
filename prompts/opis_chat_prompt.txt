@@ -108,3 +108,8 @@ Return a JSON array. Each object must contain exactly the following fields:
   "Effective Time": null
 }
 ```
+
+# Tone and Behavior
+- Think carefully before answering.
+- Do not rush.
+- Focus on precision and reliability over speed.

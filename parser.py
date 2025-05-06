@@ -716,12 +716,16 @@ def mark_email_as_processed(uid: str, env: Dict[str, str]) -> None:
 
 # --- Grok API Functions ---
 def load_prompt(filename: str) -> str:
-    logger.info(f"Loading prompt from file: {filename}")
+    logger.info(f"📄 Loading prompt from file: {filename}")
     prompt_path = PROMPT_DIR / filename
-    logger.info(f"Resolved prompt path: {prompt_path}")
+    logger.info(f"📁 Resolved prompt path: {prompt_path}")
     with open(prompt_path, "r", encoding="utf-8") as f:
         prompt = f.read()
-    logger.info(f"Loaded prompt (first 200 chars): {prompt[:200].replace(chr(10), ' ')}...")
+    logger.info(f"🧾 Loaded prompt (first 200 chars): {prompt[:200].replace(chr(10), ' ')}...")
+    if "{{OPIS_TERMINAL_EXAMPLES}}" not in prompt:
+        logger.warning("⚠️ OPIS terminal injection placeholder NOT found in loaded prompt!")
+    else:
+        logger.debug("🔄 OPIS terminal placeholder detected in prompt.")
     return prompt
 
 
@@ -748,6 +752,9 @@ async def call_grok_api(
         }
 
         logger.info(f"📡 Sending POST request to Grok API for process {process_id}")
+        logger.debug(f"🧠 Final prompt (first 2000 chars):\n{prompt[:2000]}")
+        logger.debug(f"📝 User content (first 1000 chars):\n{content[:1000]}")
+
         async with session.post(GROK_API_URL, headers=headers, json=payload, timeout=120) as response:
             logger.info(f"📥 Grok API HTTP status: {response.status}")
             response_text = await response.text()
@@ -766,7 +773,6 @@ async def call_grok_api(
     except Exception as e:
         logger.error(f"💥 Exception during Grok API call: {e}")
         return None
-
 
     # --- Retry Wrapper ---
 
