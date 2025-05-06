@@ -153,7 +153,6 @@ def delete_process_status(process_id: str) -> None:
     except Exception as e:
         logger.error(f"Failed to delete status file for process {process_id}: {e}")
 
-# --- Load Translation Mappings ---
 def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
     logger.debug(f"Entering load_mappings with file_path: {file_path}")
     try:
@@ -164,129 +163,93 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             "position_holders": {},
             "products": {},
             "terminals": {},
-            "supply_lookup": {}
+            "supply_lookup": {},
+            "opis_terminals": {}
         }
         logger.debug(f"Excel file loaded, available sheets: {xl.sheet_names}")
 
-        # Load SupplierMappings
-        supplier_sheet = None
-        for sheet_name in ["SupplierMappings", "Suppliers", "Supplier Mappings"]:
-            if sheet_name in xl.sheet_names:
-                supplier_sheet = sheet_name
-                break
-        if supplier_sheet:
-            logger.debug(f"Loading SupplierMappings from sheet: {supplier_sheet}")
-            df_suppliers = xl.parse(supplier_sheet)
-            logger.debug(f"SupplierMappings dataframe loaded with shape: {df_suppliers.shape}")
-            for index, row in df_suppliers.iterrows():
-                raw_value = str(row["Raw Value"]).strip()
-                standardized_value = str(row["Standardized Value"]).strip()
+        # --- SupplierMappings ---
+        if "SupplierMappings" in xl.sheet_names:
+            df = xl.parse("SupplierMappings")
+            for _, row in df.iterrows():
+                raw = str(row["Raw Value"]).strip()
+                std = str(row["Standardized Value"]).strip()
                 domain = str(row.get("Domain", "")).strip().lower()
-                if pd.isna(raw_value) or pd.isna(standardized_value):
-                    logger.warning(f"Skipping invalid row in SupplierMappings: {row.to_dict()}")
-                    continue
-                mappings["suppliers"][raw_value] = standardized_value
-                if domain:
-                    mappings["domain_to_supplier"][domain] = standardized_value
-                    logger.debug(f"📫 Added domain mapping: {domain} → {standardized_value}")
-            logger.info(f"✅ Loaded {len(mappings['suppliers'])} supplier names")
-            logger.info(f"✅ Loaded {len(mappings['domain_to_supplier'])} domain-to-supplier mappings")
+                if raw and std:
+                    mappings["suppliers"][raw] = std
+                    if domain:
+                        mappings["domain_to_supplier"][domain] = std
+            logger.info(f"✅ Loaded {len(mappings['suppliers'])} supplier mappings")
         else:
-            logger.warning("❌ Supplier mappings sheet not found.")
+            logger.warning("❌ SupplierMappings tab not found")
 
-        # Load SupplyMappings
-        supply_sheet = None
-        for sheet_name in ["SupplyMappings", "Supply", "Supply Mappings"]:
-            if sheet_name in xl.sheet_names:
-                supply_sheet = sheet_name
-                break
-        if supply_sheet:
-            logger.debug(f"Loading SupplyMappings from sheet: {supply_sheet}")
-            df_supply = xl.parse(supply_sheet)
-            for index, row in df_supply.iterrows():
-                raw_value = str(row["Raw Value"]).strip()
-                standardized_value = str(row["Standardized Value"]).strip()
-                if pd.isna(raw_value) or pd.isna(standardized_value):
-                    logger.warning(f"Skipping invalid row in SupplyMappings: {row.to_dict()}")
-                    continue
-                mappings["position_holders"][raw_value] = standardized_value
-            logger.info(f"✅ Loaded {len(mappings['position_holders'])} position holder mappings")
+        # --- SupplyMappings ---
+        if "SupplyMappings" in xl.sheet_names:
+            df = xl.parse("SupplyMappings")
+            for _, row in df.iterrows():
+                raw = str(row["Raw Value"]).strip()
+                std = str(row["Standardized Value"]).strip()
+                if raw and std:
+                    mappings["position_holders"][raw] = std
+            logger.info(f"✅ Loaded {len(mappings['position_holders'])} supply mappings")
         else:
-            logger.warning("❌ Supply mappings sheet not found.")
+            logger.warning("❌ SupplyMappings tab not found")
 
-        # Load ProductMappings
-        product_sheet = None
-        for sheet_name in ["ProductMappings", "Products", "Product Mappings"]:
-            if sheet_name in xl.sheet_names:
-                product_sheet = sheet_name
-                break
-        if product_sheet:
-            logger.debug(f"Loading ProductMappings from sheet: {product_sheet}")
-            df_products = xl.parse(product_sheet)
-            for index, row in df_products.iterrows():
-                raw_value = str(row["Raw Value"]).strip()
-                standardized_value = str(row["Standardized Value"]).strip()
-                if pd.isna(raw_value) or pd.isna(standardized_value):
-                    logger.warning(f"Skipping invalid row in ProductMappings: {row.to_dict()}")
-                    continue
-                mappings["products"][raw_value] = standardized_value
+        # --- SupplyLookupMappings ---
+        if "SupplyLookupMappings" in xl.sheet_names:
+            df = xl.parse("SupplyLookupMappings")
+            for _, row in df.iterrows():
+                prefix = str(row.get("Prefix", "")).strip()
+                supply = str(row.get("Supply", "")).strip()
+                if prefix and supply:
+                    mappings["supply_lookup"][prefix] = supply
+            logger.info(f"✅ Loaded {len(mappings['supply_lookup'])} supply lookup mappings")
+        else:
+            logger.warning("❌ SupplyLookupMappings tab not found")
+
+        # --- ProductMappings ---
+        if "ProductMappings" in xl.sheet_names:
+            df = xl.parse("ProductMappings")
+            for _, row in df.iterrows():
+                raw = str(row["Raw Value"]).strip()
+                std = str(row["Standardized Value"]).strip()
+                if raw and std:
+                    mappings["products"][raw] = std
             logger.info(f"✅ Loaded {len(mappings['products'])} product mappings")
         else:
-            logger.warning("❌ Product mappings sheet not found.")
+            logger.warning("❌ ProductMappings tab not found")
 
-        # Load TerminalMappings
-        terminal_sheet = None
-        for sheet_name in ["TerminalMappings", "Terminals", "Terminal Mappings"]:
-            if sheet_name in xl.sheet_names:
-                terminal_sheet = sheet_name
-                break
-        if terminal_sheet:
-            logger.debug(f"Loading TerminalMappings from sheet: {terminal_sheet}")
-            df_terminals = xl.parse(terminal_sheet)
-            for index, row in df_terminals.iterrows():
-                raw_value = str(row["Raw Value"]).strip()
-                standardized_value = str(row["Standardized Value"]).strip()
+        # --- TerminalMappings ---
+        if "TerminalMappings" in xl.sheet_names:
+            df = xl.parse("TerminalMappings")
+            for _, row in df.iterrows():
+                raw = str(row["Raw Value"]).strip()
+                std = str(row["Standardized Value"]).strip()
                 condition = row.get("Condition", None)
-                if pd.isna(raw_value) or pd.isna(standardized_value):
-                    logger.warning(f"Skipping invalid row in TerminalMappings: {row.to_dict()}")
-                    continue
-                if raw_value not in mappings["terminals"]:
-                    mappings["terminals"][raw_value] = []
-                mappings["terminals"][raw_value].append({
-                    "standardized": standardized_value,
-                    "condition": condition if pd.notna(condition) else None
-                })
+                if raw and std:
+                    if raw not in mappings["terminals"]:
+                        mappings["terminals"][raw] = []
+                    mappings["terminals"][raw].append({
+                        "standardized": std,
+                        "condition": condition if pd.notna(condition) else None
+                    })
             logger.info(f"✅ Loaded {len(mappings['terminals'])} terminal mappings")
         else:
-            logger.warning("❌ Terminal mappings sheet not found.")
+            logger.warning("❌ TerminalMappings tab not found")
 
-        # Load SupplyLookupMappings
-        supply_lookup_sheet = None
-        for sheet_name in ["SupplyLookupMappings", "Supply Prefixes", "Supply Lookup"]:
-            if sheet_name in xl.sheet_names:
-                supply_lookup_sheet = sheet_name
-                break
-        if supply_lookup_sheet:
-            logger.debug(f"Loading SupplyLookupMappings from sheet: {supply_lookup_sheet}")
-            df_lookup = xl.parse(supply_lookup_sheet)
-            for index, row in df_lookup.iterrows():
-                raw_prefix = row.get("Prefix")
-                raw_supply = row.get("Supply")
-                if pd.notna(raw_prefix) and pd.notna(raw_supply):
-                    prefix = str(raw_prefix).strip()
-                    supply = str(raw_supply).strip()
-                    if prefix and supply:
-                        mappings["supply_lookup"][prefix] = supply
-                        logger.debug(f"🔗 Supply prefix mapping: {prefix} → {supply}")
-                    else:
-                        logger.warning(f"⚠️ Empty after strip in SupplyLookupMappings: {row.to_dict()}")
-                else:
-                    logger.warning(f"⚠️ Skipping row with NaN in SupplyLookupMappings: {row.to_dict()}")
-            logger.info(f"✅ Loaded {len(mappings['supply_lookup'])} supply prefix mappings")
+        # --- OPIS_Terminal_Mappings ---
+        if "OPIS_Terminal_Mappings" in xl.sheet_names:
+            df = xl.parse("OPIS_Terminal_Mappings")
+            for _, row in df.iterrows():
+                raw = str(row["Raw Terminal Name"]).strip()
+                std = str(row["Standardized Terminal Name"]).strip()
+                if raw and std:
+                    mappings["opis_terminals"][raw] = std
+            logger.info(f"✅ Loaded {len(mappings['opis_terminals'])} OPIS terminal mappings")
         else:
-            logger.warning("❌ SupplyLookupMappings sheet not found.")
+            logger.warning("❌ OPIS_Terminal_Mappings tab not found")
 
-        logger.debug("Exiting load_mappings")
+        logger.debug("✅ Exiting load_mappings successfully")
         return mappings
 
     except Exception as e:
@@ -297,9 +260,9 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             "position_holders": {},
             "products": {},
             "terminals": {},
-            "supply_lookup": {}
+            "supply_lookup": {},
+            "opis_terminals": {}
         }
-
 
 
 # --- Prompt Helpers ---
@@ -319,6 +282,15 @@ def supply_examples_prompt_block(position_holders: Dict[str, str]) -> str:
 
     block = "\n\n### SUPPLY RESOLUTION EXAMPLES\n\n" + "\n\n".join(examples)
     return block
+
+
+def opis_terminal_examples_prompt_block(opis_terminals: Dict[str, str]) -> str:
+    if not opis_terminals:
+        return ""
+
+    examples = "\n".join([f"{raw} → {std}" for raw, std in opis_terminals.items()])
+    return f"\n\n### OPIS TERMINAL EXAMPLES\n\n{examples}"
+
 
 def supply_lookup_prompt_block(supply_lookup: Dict[str, str]) -> str:
     """
@@ -939,7 +911,12 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
         prompt_file = "opis_chat_prompt.txt" if is_opis else "supplier_chat_prompt.txt"
         prompt_chat = load_prompt(prompt_file)
 
-        if not is_opis:
+        if is_opis:
+            from_block = opis_terminal_examples_prompt_block(mappings.get("opis_terminals", {}))
+            logger.debug(f"🧠 Injected OPIS terminal examples into prompt:\n{from_block}")
+            prompt_chat += "\n\n" + from_block
+
+        else:
             prompt_chat += "\n\n" + supply_examples_prompt_block(mappings.get("position_holders", {}))
             prompt_chat += "\n\n" + supply_lookup_prompt_block(mappings.get("supply_lookup", {}))
             prompt_chat += "\n\n" + terminal_mapping_prompt_block(mappings.get("terminals", {}))
