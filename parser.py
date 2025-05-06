@@ -384,28 +384,29 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
         logger.debug(f"Mapped Supplier: {supplier} → {row['Supplier']}")
 
     # --- Supply ---
-    terminal = row.get("Terminal", "")
-    supply = str(row.get("Supply", "") or "").strip()
+    if not is_opis:
+        terminal = row.get("Terminal", "")
+        supply = str(row.get("Supply", "") or "").strip()
 
-    if not supply or supply.lower() == "unknown supply":
-        # First try fuzzy/position_holder match
-        supply = resolve_supply(terminal, mappings.get("position_holders", {}))
-        logger.debug(f"resolve_supply fallback returned: {supply}")
-
-        # Then token-based prefix fallback (e.g., FH-MG-KANSAS CITY → FH)
         if not supply or supply.lower() == "unknown supply":
-            if terminal:
-                prefix_token = terminal.split("-")[0].strip().upper()
-            else:
-                prefix_token = ""
-            supply_from_lookup = mappings.get("supply_lookup", {}).get(prefix_token)
-            if supply_from_lookup:
-                supply = supply_from_lookup
-                logger.info(f"✅ Overriding missing/unknown supply using prefix '{prefix_token}': {supply_from_lookup}")
-            else:
-                logger.warning(f"❌ No supply match found for terminal prefix: '{prefix_token}', keeping supply")
+            # First try fuzzy/position_holder match
+            supply = resolve_supply(terminal, mappings.get("position_holders", {}))
+            logger.debug(f"resolve_supply fallback returned: {supply}")
 
-    row["Supply"] = supply
+            # Then token-based prefix fallback (e.g., FH-MG-KANSAS CITY → FH)
+            if not supply or supply.lower() == "unknown supply":
+                if terminal:
+                    prefix_token = terminal.split("-")[0].strip().upper()
+                else:
+                    prefix_token = ""
+                supply_from_lookup = mappings.get("supply_lookup", {}).get(prefix_token)
+                if supply_from_lookup:
+                    supply = supply_from_lookup
+                    logger.info(f"✅ Overriding missing/unknown supply using prefix '{prefix_token}': {supply_from_lookup}")
+                else:
+                    logger.warning(f"❌ No supply match found for terminal prefix: '{prefix_token}', keeping supply")
+
+        row["Supply"] = supply
 
     # --- Product ---
     product = row.get("Product Name", "")
@@ -418,23 +419,26 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
             row["Product Name"] = mappings["products"][product_key]
 
     # --- Terminal ---
-    terminal_map = mappings.get("terminals", {}).get(terminal, [])
-    supplier = row.get("Supplier", "")
-    for mapping in terminal_map:
-        condition = mapping.get("condition")
-        if condition is None:
-            row["Terminal"] = mapping["standardized"]
-            break
-        elif condition == 'Supplier in ["Phillips 66", "Cenex"]' and supplier in ["Phillips 66", "Cenex"]:
-            row["Terminal"] = mapping["standardized"]
-            break
-        elif condition == 'Supplier not in ["Phillips 66", "Cenex"]' and supplier not in ["Phillips 66", "Cenex"]:
-            row["Terminal"] = mapping["standardized"]
-            break
+    if not is_opis:
+        terminal = row.get("Terminal", "")
+        terminal_map = mappings.get("terminals", {}).get(terminal, [])
+        supplier = row.get("Supplier", "")
+        for mapping in terminal_map:
+            condition = mapping.get("condition")
+            if condition is None:
+                row["Terminal"] = mapping["standardized"]
+                break
+            elif condition == 'Supplier in ["Phillips 66", "Cenex"]' and supplier in ["Phillips 66", "Cenex"]:
+                row["Terminal"] = mapping["standardized"]
+                break
+            elif condition == 'Supplier not in ["Phillips 66", "Cenex"]' and supplier not in ["Phillips 66", "Cenex"]:
+                row["Terminal"] = mapping["standardized"]
+                break
 
     logger.debug(f"Final row after mappings: {row}")
     logger.debug("Exiting apply_mappings")
     return row
+
 
 # --- Utilities ---
 def extract_domain_from_forwarded_headers(content: str, domain_to_supplier: Dict[str, str]) -> Optional[str]:
@@ -949,32 +953,37 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
         for row in parsed_rows:
             if not isinstance(row, dict):
-                continue
-            if not row.get("Product Name") or not row.get("Terminal") or not isinstance(row.get("Price"), (int, float)):
-                continue
-
-            price = row.get("Price", 0)
-            if price > 5:
-                price = price / 100
-                row["Price"] = price
-            if price > 5:
+                logger.warning(f"⚠️ Skipped non-dict row from Grok: {type(row)} - {row}")
+                skipped_rows.append({"reason": "Non-dict row", "raw": row})
                 continue
 
-            if not is_opis and not row.get("Supplier"):
-                row["Supplier"] = supplier
-
-            row = apply_mappings(row, mappings, is_opis, email_from=supplier)
-
-            valid_rows.append({
+            # Allow fuzzy-matched keys to handle Grok quirks
+            normalized_row = {
                 "Supplier": row.get("Supplier", ""),
                 "Supply": row.get("Supply", ""),
-                "Product Name": row.get("Product Name", ""),
-                "Terminal": row.get("Terminal", ""),
-                "Price": row.get("Price", 0),
+                "Product Name": row.get("Product Name") or row.get("Product") or row.get("Prod") or "",
+                "Terminal": row.get("Terminal") or row.get("Term") or "",
+                "Price": row.get("Price") if isinstance(row.get("Price"), (int, float)) else None,
                 "Volume Type": row.get("Volume Type", ""),
                 "Effective Date": row.get("Effective Date", ""),
-                "Effective Time": row.get("Effective Time", ""),
-            })
+                "Effective Time": row.get("Effective Time", "")
+            }
+
+            # Apply mappings unless told to skip (you may skip for OPIS or pass flag)
+            normalized_row = apply_mappings(normalized_row, mappings, is_opis, email_from=supplier)
+
+            # Log if any key fields are missing or malformed
+            missing_fields = []
+            if not normalized_row["Product Name"]: missing_fields.append("Product Name")
+            if normalized_row["Price"] is None: missing_fields.append("Price")
+            if not normalized_row["Terminal"]: missing_fields.append("Terminal")
+
+            if missing_fields:
+                logger.warning(
+                    f"⚠️ Parsed row has missing or invalid fields ({', '.join(missing_fields)}): {normalized_row}")
+                normalized_row["__warning__"] = f"Missing fields: {', '.join(missing_fields)}"
+
+            valid_rows.append(normalized_row)
 
         if valid_rows:
             mark_email_as_processed(email.get("uid", ""), env)
@@ -991,8 +1000,6 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
     logger.debug(f"Exiting process_email_with_delay with {len(valid_rows)} valid rows")
     return valid_rows, skipped_rows, failed_email
-
-
 
 
 from typing import Optional
