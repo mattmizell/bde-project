@@ -817,36 +817,6 @@ async def call_grok_api_with_retry(
 
 
 # --- Processing Functions ---
-async def run_grok_with_recursive_chunking(prompt, chunk, env, session, process_id, max_depth=3):
-    parsed_rows = []
-    try:
-        raw = await call_grok_api_with_retry(prompt, chunk, env, session, process_id)
-        if raw is None:
-            logger.warning(f"Grok returned None for chunk in process {process_id}")
-            return []
-
-        if raw.startswith("```json"):
-            raw = re.sub(r"```json|```", "", raw, flags=re.DOTALL).strip()
-
-        data = json.loads(raw)
-        if isinstance(data, list):
-            return data
-        else:
-            raise ValueError("Parsed response is not a list")
-
-    except Exception as ex:
-        logger.warning(f"Failed to parse Grok response. Error: {ex}")
-        if max_depth > 0:
-            midpoint = len(chunk) // 2
-            chunk1, chunk2 = chunk[:midpoint], chunk[midpoint:]
-            logger.info("🪓 Recursively splitting chunk due to parse error")
-            results1 = await run_grok_with_recursive_chunking(prompt, chunk1, env, session, process_id, max_depth-1)
-            results2 = await run_grok_with_recursive_chunking(prompt, chunk2, env, session, process_id, max_depth-1)
-            return results1 + results2
-        else:
-            logger.error("❌ Max recursion depth reached; skipping chunk")
-            return []
-
 async def run_grok_with_recursive_chunking(prompt: str, chunk: str, env: Dict[str, str], session: aiohttp.ClientSession, process_id: str, depth: int = 0) -> List[Dict]:
     if depth > 3:
         logger.error(f"🚫 Max recursion depth reached for chunk in process {process_id}")
@@ -913,8 +883,12 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
 
         if is_opis:
             from_block = opis_terminal_examples_prompt_block(mappings.get("opis_terminals", {}))
-            logger.debug(f"🧠 Injected OPIS terminal examples into prompt:\n{from_block}")
-            prompt_chat += "\n\n" + from_block
+            if "{{OPIS_TERMINAL_EXAMPLES}}" in prompt_chat:
+                prompt_chat = prompt_chat.replace("{{OPIS_TERMINAL_EXAMPLES}}", from_block)
+                logger.debug("✅ Injected OPIS terminal normalization examples into prompt")
+            else:
+                logger.warning("⚠️ OPIS terminal injection placeholder not found in prompt — appending instead")
+                prompt_chat += "\n\n" + from_block
 
         else:
             prompt_chat += "\n\n" + supply_examples_prompt_block(mappings.get("position_holders", {}))
