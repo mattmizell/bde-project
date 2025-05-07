@@ -164,7 +164,8 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             "products": {},
             "terminals": {},
             "supply_lookup": {},
-            "opis_terminals": {}
+            "opis_terminals": {},
+            "volume_types": {}
         }
         logger.debug(f"Excel file loaded, available sheets: {xl.sheet_names}")
 
@@ -249,6 +250,21 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
         else:
             logger.warning("❌ OPIS_Terminal_Mappings tab not found")
 
+        # --- Volume_Type_Mappings ---
+        if "Volume_Type_Mappings" in xl.sheet_names:
+            df = xl.parse("Volume_Type_Mappings")
+            for _, row in df.iterrows():
+                supplier = str(row.get("Supplier", "")).strip()
+                supply = str(row.get("Supply", "")).strip()
+                terminal = str(row.get("Terminal", "")).strip()
+                volume_type = str(row.get("Volume Type", "")).strip()
+                if supplier and supply and terminal and volume_type:
+                    key = (supplier, supply, terminal)
+                    mappings["volume_types"][key] = volume_type
+            logger.info(f"✅ Loaded {len(mappings['volume_types'])} volume type mappings")
+        else:
+            logger.warning("❌ Volume_Type_Mappings tab not found")
+
         logger.debug("✅ Exiting load_mappings successfully")
         return mappings
 
@@ -261,8 +277,10 @@ def load_mappings(file_path: str = "mappings.xlsx") -> Dict[str, Dict]:
             "products": {},
             "terminals": {},
             "supply_lookup": {},
-            "opis_terminals": {}
+            "opis_terminals": {},
+            "volume_types": {}
         }
+
 
 
 # --- Prompt Helpers ---
@@ -283,6 +301,14 @@ def supply_examples_prompt_block(position_holders: Dict[str, str]) -> str:
     block = "\n\n### SUPPLY RESOLUTION EXAMPLES\n\n" + "\n\n".join(examples)
     return block
 
+def volume_type_examples_prompt_block(volume_types: Dict[Tuple[str, str, str], str]) -> str:
+    if not volume_types:
+        return ""
+    examples = [
+        f"Supplier: {supplier} | Supply: {supply} | Terminal: {terminal} → Volume Type: {vol_type}"
+        for (supplier, supply, terminal), vol_type in volume_types.items()
+    ]
+    return "\n\n### VOLUME TYPE MAPPING EXAMPLES\n\n" + "\n".join(examples)
 
 def opis_terminal_examples_prompt_block(opis_terminals: Dict[str, str]) -> str:
     if not opis_terminals:
@@ -434,6 +460,20 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
             elif condition == 'Supplier not in ["Phillips 66", "Cenex"]' and supplier not in ["Phillips 66", "Cenex"]:
                 row["Terminal"] = mapping["standardized"]
                 break
+
+    # --- Volume Type Mapping ---
+    volume_type = str(row.get("Volume Type", "") or "").strip()
+    volume_key = (
+        str(row.get("Supplier", "")).strip(),
+        str(row.get("Supply", "")).strip(),
+        str(row.get("Terminal", "")).strip()
+    )
+
+    if not volume_type and volume_key in mappings.get("volume_types", {}):
+        row["Volume Type"] = mappings["volume_types"][volume_key]
+        logger.info(f"🧪 Volume Type set from mapping: {row['Volume Type']} for {volume_key}")
+    elif not volume_type:
+        logger.warning(f"⚠️ Missing Volume Type for {volume_key}")
 
     logger.debug(f"Final row after mappings: {row}")
     logger.debug("Exiting apply_mappings")
@@ -887,7 +927,8 @@ async def process_email_with_delay(email: Dict[str, str], env: Dict[str, str], p
             prompt_chat += "\n\n" + supply_examples_prompt_block(mappings.get("position_holders", {}))
             prompt_chat += "\n\n" + supply_lookup_prompt_block(mappings.get("supply_lookup", {}))
             prompt_chat += "\n\n" + terminal_mapping_prompt_block(mappings.get("terminals", {}))
-
+            prompt_chat += "\n\n" + volume_type_examples_prompt_block(mappings.get("volume_types", {}))
+            logger.debug(f"📦 Final prompt with volume types:\n{prompt_chat}")
         email_from = email.get("from_addr", "")
         supplier = None
 
