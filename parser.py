@@ -414,28 +414,21 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
         terminal = row.get("Terminal", "")
         supply = str(row.get("Supply", "") or "").strip()
 
-        # ✅ Special-case fuzzy override for By-Lo Oil + Wood River + KMEP
-        if row.get("Supplier", "").lower().strip() == "by-lo oil":
-            terminal_norm = terminal.lower().replace(" ", "")
-            if "woodriver" in terminal_norm and "kmep" in terminal_norm:
-                row["Supply"] = "BP"
-                logger.info(f"🔁 Fuzzy override: Supply set to 'BP' for By-Lo Oil at terminal '{terminal}'")
-        else:
-            if not supply or supply.lower() == "unknown supply":
-                # First try fuzzy/position_holder match
-                supply = resolve_supply(terminal, mappings.get("position_holders", {}))
-                logger.debug(f"resolve_supply fallback returned: {supply}")
+        if not supply or supply.lower() == "unknown supply":
+            # First try fuzzy/position_holder match
+            supply = resolve_supply(terminal, mappings.get("position_holders", {}))
+            logger.debug(f"resolve_supply fallback returned: {supply}")
 
-                # Then token-based prefix fallback
-                prefix_token = terminal.split("-")[0].strip().upper() if terminal else ""
-                supply_from_lookup = mappings.get("supply_lookup", {}).get(prefix_token)
-                if supply_from_lookup:
-                    supply = supply_from_lookup
-                    logger.info(f"✅ Overriding missing/unknown supply using prefix '{prefix_token}': {supply_from_lookup}")
-                else:
-                    logger.warning(f"❌ No supply match found for terminal prefix: '{prefix_token}', keeping supply")
+            # Then token-based prefix fallback
+            prefix_token = terminal.split("-")[0].strip().upper() if terminal else ""
+            supply_from_lookup = mappings.get("supply_lookup", {}).get(prefix_token)
+            if supply_from_lookup:
+                supply = supply_from_lookup
+                logger.info(f"✅ Overriding missing/unknown supply using prefix '{prefix_token}': {supply_from_lookup}")
+            else:
+                logger.warning(f"❌ No supply match found for terminal prefix: '{prefix_token}', keeping supply")
 
-            row["Supply"] = supply
+        row["Supply"] = supply
 
     # --- Product ---
     product = row.get("Product Name", "")
@@ -483,6 +476,7 @@ def apply_mappings(row: Dict, mappings: Dict[str, Dict], is_opis: bool, email_fr
     logger.debug(f"Final row after mappings: {row}")
     logger.debug("Exiting apply_mappings")
     return row
+
 
 # --- Utilities ---
 def extract_domain_from_forwarded_headers(content: str, domain_to_supplier: Dict[str, str]) -> Optional[str]:
