@@ -69,7 +69,7 @@ Output:
 🔍 Additional Guidance:
 - Only return structured rows with valid price and terminal info.
 - Skip disclaimers, footers, summaries, and malformed rows.
-- Do not discard or modify unusually high prices below $100. These are usually intentionally set prices to indicate stock is out at the terminal and should be preserved as-is in the output.
+- Do not discard or modify unusually high prices below $50. These are usually intentionally set prices to indicate stock is out at the terminal and should be preserved as-is in the output.
 - Do not attempt to normalize or "fix" prices. Use the exact numerical value listed in the email content.
-- If Price > $100, assume it is in cents and divide by 100 
+- If Price > $50, assume it is in cents and divide by 100 
 - Output should be a list of JSON objects, one per valid row.
