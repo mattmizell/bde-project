@@ -89,3 +89,13 @@ async def cleanup_process(process_id: str):
     delete_process_status(process_id)
     return {"message": "Process status deleted"}
 # trigger redeploy
+
+@app.get("/log/{process_id}")
+async def get_log(process_id: str):
+    log_path = f"debug_{process_id}.txt"
+    try:
+        async with aiofiles.open(log_path, mode='r') as f:
+            contents = await f.read()
+        return {"log": contents}
+    except FileNotFoundError:
+        return {"log": "Log file not found."}
