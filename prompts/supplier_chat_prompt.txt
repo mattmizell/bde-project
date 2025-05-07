@@ -19,6 +19,9 @@ Extract one object per product/terminal row, including the following fields:
 - Supply ≠ Supplier in many cases.
 - If unsure, set **Supply** to null.
 - Product rows may appear without a “CHANGE” column — do not drop them if Product Name and Price are present.
+🟡 Special Rule:
+- If the supplier is **By-Lo Oil** and the terminal contains both **Wood River** and **KMEP**, then the Supply must be **BP**, regardless of other indicators.
+
 
 ✅ Examples:
 1.
