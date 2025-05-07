@@ -788,28 +788,10 @@ async def call_grok_api_with_retry(
     session: aiohttp.ClientSession,
     process_id: str,
     max_retries: int = 3,
-    delay_seconds: int = 10
+    base_delay_seconds: int = 120
 ) -> Optional[str]:
-    original_prompt = prompt
-    original_content = content
-
     for attempt in range(1, max_retries + 1):
-        logger.info(f"🔁 Grok call attempt {attempt}/{max_retries} for process {process_id}")
-
-        # Shrink content progressively on retries
-        if attempt > 1:
-            shrink_ratio = 0.8 ** (attempt - 1)
-            shrunk_len = int(len(original_content) * shrink_ratio)
-            content = original_content[:shrunk_len]
-            logger.warning(f"✂️ Retry {attempt}: shrinking content to {shrunk_len} characters")
-
-        # Strip optional blocks like supply examples on final attempt
-        if attempt == max_retries:
-            if "---SUPPLY EXAMPLES---" in original_prompt:
-                prompt = original_prompt.split("---SUPPLY EXAMPLES---")[0].strip()
-                logger.warning("⚠️ Final retry: stripping prompt after '---SUPPLY EXAMPLES---'")
-            else:
-                prompt = original_prompt
+        logger.info(f"🔁 Grok call attempt {attempt}/{max_retries} for process {process_id} (timeout: {base_delay_seconds}s)")
 
         result = await call_grok_api(prompt, content, env, session, process_id)
 
@@ -818,8 +800,9 @@ async def call_grok_api_with_retry(
             return result
 
         if attempt < max_retries:
-            logger.warning(f"⏳ Waiting {delay_seconds}s before retrying...")
-            await asyncio.sleep(delay_seconds)
+            logger.warning(f"⏳ Attempt {attempt} failed. Waiting {base_delay_seconds}s before next retry...")
+            await asyncio.sleep(base_delay_seconds)
+            base_delay_seconds += 30  # increase wait before next try
 
     logger.error(f"❌ All Grok retries failed for process {process_id}")
     return None
